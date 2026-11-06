@@ -1,6 +1,6 @@
 use crate::git::Commit;
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct GraphRow {
     pub node: usize,
     pub incoming: usize,
@@ -9,8 +9,12 @@ pub struct GraphRow {
 }
 
 /// Topological rows keep the active parent lanes across virtualized list items.
+#[cfg(test)]
 pub fn layout(commits: &[Commit]) -> Vec<GraphRow> {
-    let mut lanes = Vec::<String>::new();
+    extend(commits, &mut Vec::new())
+}
+
+pub fn extend(commits: &[Commit], lanes: &mut Vec<String>) -> Vec<GraphRow> {
     commits
         .iter()
         .map(|commit| {

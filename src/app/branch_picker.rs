@@ -1,5 +1,5 @@
 use super::controls;
-use crate::git::Branch;
+use crate::git::{Branch, HistoryScope};
 use gpui_kit::component::{
     ActiveTheme, Icon, IconName, StyledExt, h_flex,
     input::{InputEvent, InputState},
@@ -9,9 +9,16 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
+use std::sync::Arc;
 
 const ROW_HEIGHT: f32 = 30.;
 const MAX_LIST_HEIGHT: f32 = 420.;
+
+pub(super) enum BranchEvent {
+    Browse(HistoryScope),
+    Switch(String),
+}
+impl EventEmitter<BranchEvent> for BranchPicker {}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BranchRow {
@@ -49,7 +56,7 @@ fn branch_rows(branches: &[Branch], query: &str, collapsed: [bool; 2]) -> Vec<Br
 }
 
 pub(super) struct BranchPicker {
-    branches: Vec<Branch>,
+    branches: Arc<[Branch]>,
     search: Entity<InputState>,
     collapsed: [bool; 2],
     rows: Vec<BranchRow>,
@@ -66,7 +73,7 @@ impl BranchPicker {
         })
         .detach();
         Self {
-            branches: Vec::new(),
+            branches: Arc::from([]),
             search,
             collapsed: [false; 2],
             rows: Vec::new(),
@@ -74,9 +81,24 @@ impl BranchPicker {
         }
     }
 
-    pub(super) fn set_branches(&mut self, branches: Vec<Branch>, cx: &mut Context<Self>) {
+    pub(super) fn set_branches(
+        &mut self,
+        branches: impl Into<Arc<[Branch]>>,
+        cx: &mut Context<Self>,
+    ) {
+        let offset = self.scroll.0.borrow().base_handle.offset();
+        let branches = branches.into();
         self.branches = branches;
         self.filter(cx);
+        self.scroll.0.borrow_mut().deferred_scroll_to_item = None;
+        self.scroll.0.borrow().base_handle.set_offset(offset);
+    }
+
+    pub(super) fn clear(&mut self, cx: &mut Context<Self>) {
+        self.branches = Arc::from([]);
+        self.rows = Vec::new();
+        self.scroll = UniformListScrollHandle::new();
+        cx.notify();
     }
 
     pub(super) fn focus_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -142,6 +164,16 @@ impl BranchPicker {
             BranchRow::Branch(index) => {
                 let branch = &self.branches[index];
                 let name = branch.name.clone();
+                let reference = format!(
+                    "{}{}",
+                    if branch.remote {
+                        "refs/remotes/"
+                    } else {
+                        "refs/heads/"
+                    },
+                    name
+                );
+                let switch_name = name.clone();
                 h_flex()
                     .id(("branch-row", index))
                     .w_full()
@@ -175,6 +207,19 @@ impl BranchPicker {
                                 .child("当前"),
                         )
                     })
+                    .when(!branch.remote && !branch.current, |view| {
+                        view.child(
+                            controls::button(("checkout", index))
+                                .label("切换")
+                                .on_click(cx.listener(move |_, _, _, cx| {
+                                    cx.stop_propagation();
+                                    cx.emit(BranchEvent::Switch(switch_name.clone()));
+                                })),
+                        )
+                    })
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        cx.emit(BranchEvent::Browse(HistoryScope::Branch(reference.clone())))
+                    }))
                     .tooltip(move |window, cx| Tooltip::new(name.clone()).build(window, cx))
                     .into_any_element()
             }
@@ -203,6 +248,17 @@ impl Render for BranchPicker {
         v_flex()
             .w(px(340.))
             .min_w_0()
+            .child(
+                h_flex()
+                    .p_1()
+                    .gap_1()
+                    .child(controls::button("browse-head").label("当前分支").on_click(
+                        cx.listener(|_, _, _, cx| cx.emit(BranchEvent::Browse(HistoryScope::Head))),
+                    ))
+                    .child(controls::button("browse-all").label("全部分支").on_click(
+                        cx.listener(|_, _, _, cx| cx.emit(BranchEvent::Browse(HistoryScope::All))),
+                    )),
+            )
             .child(div().p(px(8.)).child(controls::search_input(&self.search)))
             .child(
                 div()
@@ -322,7 +378,7 @@ mod layout_tests {
                                     remote: true,
                                     current: false,
                                 })
-                                .collect(),
+                                .collect::<Vec<_>>(),
                             cx,
                         );
                         picker

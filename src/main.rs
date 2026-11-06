@@ -6,6 +6,7 @@ mod git;
 mod graph;
 mod motion;
 mod theme;
+mod update;
 
 use config::{Appearance, ConfigStore};
 use gpui_kit::component::{ThemeMode, TitleBar};
@@ -41,8 +42,9 @@ fn main() -> anyhow::Result<()> {
         motion::init(config.motion, cx);
         cx.bind_keys([
             KeyBinding::new("ctrl-o", app::OpenProject, None),
-            KeyBinding::new("f5", app::Refresh, None),
             KeyBinding::new("ctrl-,", app::OpenSettings, None),
+            KeyBinding::new("ctrl-f", app::FocusHistory, None),
+            KeyBinding::new("ctrl-b", app::ToggleBranches, None),
         ]);
         let mode = match config.appearance {
             Appearance::Light => ThemeMode::Light,

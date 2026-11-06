@@ -3,10 +3,21 @@ use futures_lite::io::{AsyncRead, AsyncReadExt};
 use std::{
     ffi::{OsStr, OsString},
     path::{Path, PathBuf},
+    sync::Arc,
     time::Duration,
 };
 
 pub const IMAGE_FILE_LIMIT: u64 = 8 * 1024 * 1024;
+mod history;
+pub use history::{History, HistoryStream};
+mod stash;
+pub use stash::{Stash, StashDetail};
+mod statistics;
+pub use statistics::LineStatistics;
+mod worktrees;
+pub use worktrees::Worktree;
+#[cfg(test)]
+pub(crate) mod history_tests;
 
 #[derive(Clone, Debug)]
 pub struct Git {
@@ -14,14 +25,14 @@ pub struct Git {
     pub version: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChangedFile {
     pub path: String,
     pub original_path: Option<String>,
     pub status: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Commit {
     pub id: String,
     pub short_id: String,
@@ -32,16 +43,26 @@ pub struct Commit {
     pub references: Vec<String>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Repository {
     pub root: PathBuf,
+    git_dir: PathBuf,
+    pub operation_states: Vec<String>,
     pub branch: String,
+    pub head: Option<String>,
     pub tracking: Option<BranchTracking>,
     pub changes: Vec<ChangedFile>,
-    pub commits: Vec<Commit>,
-    pub stashes: Vec<String>,
-    pub branches: Vec<Branch>,
-    pub graph: Vec<crate::graph::GraphRow>,
+    pub commits: Arc<History<Commit>>,
+    pub stashes: Vec<Stash>,
+    pub branches: Arc<[Branch]>,
+    pub graph: Arc<History<crate::graph::GraphRow>>,
+    pub graph_width: usize,
+    pub history_scope: HistoryScope,
+    history_roots: Arc<[String]>,
+    pub history_complete: bool,
+    pub history_pending: bool,
+    graph_lanes: Arc<[String]>,
+    history_key: Vec<u8>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -57,6 +78,55 @@ pub struct BranchTracking {
     /// HEAD-only (ahead) and upstream-only (behind) commits. None means the
     /// configured upstream ref is unavailable locally, rather than zero.
     pub counts: Option<(usize, usize)>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum HistoryScope {
+    #[default]
+    Head,
+    Branch(String),
+    All,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ChangeScope {
+    #[default]
+    All,
+    Staged,
+    Working,
+}
+impl ChangeScope {
+    pub fn includes(self, file: &ChangedFile) -> bool {
+        match self {
+            Self::All => true,
+            Self::Staged => {
+                file.status != "??" && file.status.as_bytes().first().is_some_and(|b| *b != b' ')
+            }
+            Self::Working => {
+                file.status == "??" || file.status.as_bytes().get(1).is_some_and(|b| *b != b' ')
+            }
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::All => "HEAD → 工作区",
+            Self::Staged => "HEAD → 暂存区",
+            Self::Working => "暂存区 → 工作区",
+        }
+    }
+}
+
+impl HistoryScope {
+    pub fn label(&self) -> &str {
+        match self {
+            Self::Head => "当前分支",
+            Self::All => "全部分支",
+            Self::Branch(name) => name
+                .strip_prefix("refs/heads/")
+                .or_else(|| name.strip_prefix("refs/remotes/"))
+                .unwrap_or(name),
+        }
+    }
 }
 
 impl Git {
@@ -152,6 +222,97 @@ impl Git {
             .await
             .context("此目录不是可读取的 Git 工作目录")?;
         let root = PathBuf::from(String::from_utf8_lossy(&root).trim());
+        self.read_repository(root, None, true).await
+    }
+
+    /// Called by the single background polling task. Unchanged history shares
+    /// its allocation; unchanged snapshots are discarded off the UI thread.
+    pub async fn refresh(
+        &self,
+        previous: &Repository,
+        update_history: bool,
+    ) -> Result<Option<Repository>> {
+        let next = self
+            .read_repository(previous.root.clone(), Some(previous), update_history)
+            .await?;
+        Ok((next != *previous).then_some(next))
+    }
+
+    pub async fn browse(&self, previous: &Repository, scope: HistoryScope) -> Result<Repository> {
+        let mut previous = previous.clone();
+        previous.history_scope = scope;
+        previous.history_key.clear();
+        self.read_repository(previous.root.clone(), Some(&previous), true)
+            .await
+    }
+
+    pub async fn switch_branch(&self, root: &Path, name: &str) -> Result<()> {
+        let current = self.open(root).await?;
+        anyhow::ensure!(
+            current.changes.is_empty(),
+            "工作区或暂存区存在更改，暂不能切换分支"
+        );
+        anyhow::ensure!(
+            current.operation_states.is_empty(),
+            "仓库正在进行其他操作，暂不能切换分支"
+        );
+        anyhow::ensure!(
+            current
+                .branches
+                .iter()
+                .any(|branch| !branch.remote && branch.name == name),
+            "仅支持切换已有本地分支"
+        );
+        // Writes are not subject to the read timeout/cancellation policy.
+        let mut command = std::process::Command::new(&self.executable);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000);
+        }
+        command
+            .current_dir(root)
+            .args(["switch", "--", name])
+            .env("GIT_TERMINAL_PROMPT", "0");
+        let mut command = async_process::Command::from(command);
+        let mut child = command
+            .kill_on_drop(false)
+            .reap_on_drop(true)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()?;
+        let stdout = child.stdout.take().context("无法读取 Git 输出")?;
+        let stderr = child.stderr.take().context("无法读取 Git 错误")?;
+        let (_, stderr) =
+            futures_lite::future::try_zip(drain_capped(stdout), drain_capped(stderr)).await?;
+        let status = child.status().await?;
+        anyhow::ensure!(
+            status.success(),
+            "{}",
+            String::from_utf8_lossy(&stderr).trim()
+        );
+        Ok(())
+    }
+
+    async fn read_repository(
+        &self,
+        root: PathBuf,
+        previous: Option<&Repository>,
+        update_history: bool,
+    ) -> Result<Repository> {
+        let git_dir = if let Some(previous) = previous {
+            previous.git_dir.clone()
+        } else {
+            PathBuf::from(
+                String::from_utf8_lossy(
+                    &self
+                        .run(Some(&root), ["rev-parse", "--absolute-git-dir"])
+                        .await?,
+                )
+                .trim(),
+            )
+        };
         let branch = self.run(Some(&root), ["branch", "--show-current"]).await?;
         let branch = String::from_utf8_lossy(&branch).trim().to_string();
         let tracking = self
@@ -173,28 +334,92 @@ impl Git {
                 ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
             )
             .await?;
-        let has_head = self
-            .run(Some(&root), ["rev-parse", "--verify", "--quiet", "HEAD"])
-            .await
-            .is_ok();
-        let commits = if has_head {
-            let log = self
-                .run(
-                    Some(&root),
-                    [
-                        "log",
-                        "-n",
-                        "200",
-                        "-z",
-                        "--date=format-local:%Y-%m-%d %H:%M",
-                        "--format=%H%x00%h%x00%an%x00%ad%x00%s%x00%P%x00%D",
-                        "--topo-order",
-                    ],
-                )
-                .await?;
-            parse_log(&log)
+        // status distinguishes an unborn branch from a failed Git query.
+        // Include tags and object IDs so external ref moves invalidate decorations.
+        let refs = self
+            .run(
+                Some(&root),
+                [
+                    "for-each-ref",
+                    "--format=%(refname)%00%(symref)%00%(HEAD)%00%(objectname)",
+                    "refs/heads",
+                    "refs/remotes",
+                    "refs/tags",
+                ],
+            )
+            .await?;
+        let head = tracking
+            .split(|b| *b == 0)
+            .find_map(|line| line.strip_prefix(b"# branch.oid "))
+            .context("Git 未返回 HEAD 状态")?;
+        let history_scope = previous
+            .map(|repo| repo.history_scope.clone())
+            .unwrap_or_default();
+        let mut roots = Vec::new();
+        match &history_scope {
+            HistoryScope::Head => {
+                if head != b"(initial)" {
+                    roots.push(std::str::from_utf8(head)?.to_string());
+                }
+            }
+            HistoryScope::Branch(reference) => {
+                let expression = format!("{reference}^{{commit}}");
+                let object = self
+                    .run(Some(&root), ["rev-parse", "--verify", &expression])
+                    .await?;
+                roots.push(String::from_utf8_lossy(&object).trim().to_string());
+            }
+            HistoryScope::All => {
+                for line in String::from_utf8_lossy(&refs).lines() {
+                    let fields: Vec<_> = line.split('\0').collect();
+                    if fields.len() == 4
+                        && fields[1].is_empty()
+                        && (fields[0].starts_with("refs/heads/")
+                            || fields[0].starts_with("refs/remotes/"))
+                    {
+                        roots.push(fields[3].to_string());
+                    }
+                }
+                if head != b"(initial)" {
+                    roots.push(std::str::from_utf8(head)?.to_string());
+                }
+                roots.sort();
+                roots.dedup();
+            }
+        }
+        let mut history_key = head.to_vec();
+        history_key.push(0);
+        history_key.extend_from_slice(&refs);
+        history_key.extend_from_slice(format!("{history_scope:?}").as_bytes());
+        let history_pending =
+            !update_history && previous.is_some_and(|repo| repo.history_key != history_key);
+        let unchanged_history =
+            previous.filter(|repo| history_pending || repo.history_key == history_key);
+        if history_pending {
+            history_key = previous.unwrap().history_key.clone();
+        }
+        let mut graph_lanes = Vec::new();
+        let commits = if let Some(previous) = unchanged_history {
+            previous.commits.clone()
+        } else if !roots.is_empty() {
+            let mut args: Vec<String> = [
+                "log",
+                "-n",
+                "200",
+                "-z",
+                "--date=format-local:%Y-%m-%d %H:%M",
+                "--format=%H%x00%h%x00%an%x00%ad%x00%s%x00%P%x00%D",
+                "--topo-order",
+            ]
+            .into_iter()
+            .map(String::from)
+            .collect();
+            args.extend(roots.clone());
+            args.push("--".into());
+            let log = self.run(Some(&root), args).await?;
+            Arc::new(History::new(parse_log(&log)))
         } else {
-            Vec::new()
+            Arc::new(History::new(Vec::new()))
         };
         let stashes = self
             .run(
@@ -202,35 +427,76 @@ impl Git {
                 [
                     "stash",
                     "list",
+                    "-z",
                     "--date=format-local:%Y-%m-%d %H:%M",
-                    "--format=%gd  %cd  %s",
+                    "--format=%H%x00%cd%x00%s",
                 ],
             )
             .await?;
-        let branches = self
-            .run(
-                Some(&root),
-                [
-                    "for-each-ref",
-                    "--format=%(refname)%00%(symref)%00%(HEAD)",
-                    "refs/heads",
-                    "refs/remotes",
-                ],
-            )
-            .await?;
+        let branches = parse_branches(&refs).into();
+        let graph = unchanged_history
+            .map(|repo| repo.graph.clone())
+            .unwrap_or_else(|| {
+                Arc::new(History::new(crate::graph::extend(
+                    &commits.iter().cloned().collect::<Vec<_>>(),
+                    &mut graph_lanes,
+                )))
+            });
+        let history_complete = unchanged_history
+            .map(|repo| repo.history_complete)
+            .unwrap_or(commits.len() < history::HISTORY_BATCH);
+        let graph_lanes = unchanged_history
+            .map(|repo| repo.graph_lanes.clone())
+            .unwrap_or_else(|| graph_lanes.into());
+        let graph_width = unchanged_history
+            .map(|repo| repo.graph_width)
+            .unwrap_or_else(|| graph.iter().map(|row| row.width).max().unwrap_or(1));
+        let changes = parse_status(&status);
+        let mut operation_states = Vec::new();
+        for (marker, label) in [
+            ("MERGE_HEAD", "合并中"),
+            ("rebase-merge", "变基中"),
+            ("rebase-apply", "变基 / 应用补丁中"),
+            ("CHERRY_PICK_HEAD", "拣选中"),
+            ("REVERT_HEAD", "还原提交中"),
+            ("BISECT_LOG", "二分定位中"),
+        ] {
+            if git_dir.join(marker).exists() {
+                operation_states.push(label.to_string());
+            }
+        }
+        let conflicts = changes
+            .iter()
+            .filter(|file| file.status.contains('U') || file.status == "AA" || file.status == "DD")
+            .count();
+        if conflicts > 0 {
+            operation_states.push(format!("{conflicts} 个冲突文件"));
+        }
         Ok(Repository {
             root,
+            head: (head != b"(initial)").then(|| String::from_utf8_lossy(head).into_owned()),
+            git_dir,
+            operation_states,
             tracking: parse_tracking(&tracking),
             branch: if branch.is_empty() {
                 "分离 HEAD".into()
             } else {
                 branch
             },
-            changes: parse_status(&status),
-            graph: crate::graph::layout(&commits),
+            changes,
+            graph,
             commits,
-            stashes: text_lines(&stashes),
-            branches: parse_branches(&branches),
+            stashes: stash::parse_stashes(&stashes),
+            branches,
+            history_key,
+            history_complete,
+            history_pending,
+            graph_lanes,
+            graph_width,
+            history_scope,
+            history_roots: unchanged_history
+                .map(|repo| repo.history_roots.clone())
+                .unwrap_or_else(|| roots.into()),
         })
     }
 
@@ -263,6 +529,25 @@ impl Git {
             .collect())
     }
 
+    pub async fn commit_body(&self, root: &Path, id: &str) -> Result<String> {
+        let output = self
+            .run(Some(root), ["show", "-s", "--format=%B", id, "--"])
+            .await?;
+        let message = String::from_utf8_lossy(&output);
+        if message.len() > 64 * 1024 {
+            let mut end = 64 * 1024;
+            while !message.is_char_boundary(end) {
+                end -= 1;
+            }
+            Ok(format!(
+                "{}\n\n[提交说明过长，仅显示前 64 KiB]",
+                &message[..end]
+            ))
+        } else {
+            Ok(message.trim().to_string())
+        }
+    }
+
     /// Read original bytes without text conversion. None selects the worktree;
     /// a missing file is distinct from a failed or oversized read.
     pub async fn image_file(
@@ -271,6 +556,29 @@ impl Git {
         revision: Option<&str>,
         path: &str,
     ) -> Result<Option<Vec<u8>>> {
+        if revision == Some(":") {
+            let entry = self
+                .run(Some(root), ["ls-files", "--stage", "-z", "--", path])
+                .await?;
+            if entry.is_empty() {
+                return Ok(None);
+            }
+            let header = entry.split(|b| *b == b'\t').next().unwrap_or_default();
+            let fields: Vec<_> = std::str::from_utf8(header)?.split_whitespace().collect();
+            anyhow::ensure!(
+                fields.len() == 3 && fields[2] == "0" && fields[0].starts_with("100"),
+                "暂存区图片存在冲突或不是普通文件"
+            );
+            let size = self.run(Some(root), ["cat-file", "-s", fields[1]]).await?;
+            anyhow::ensure!(
+                std::str::from_utf8(&size)?.trim().parse::<u64>()? <= IMAGE_FILE_LIMIT,
+                "图片超过 8 MiB，暂不预览"
+            );
+            return self
+                .run(Some(root), ["cat-file", "blob", fields[1]])
+                .await
+                .map(Some);
+        }
         if let Some(revision) = revision {
             let entry = self
                 .run(Some(root), ["ls-tree", "-l", "-z", revision, "--", path])
@@ -326,6 +634,16 @@ impl Git {
         commit: Option<&str>,
         file: &ChangedFile,
     ) -> Result<String> {
+        self.diff_scoped(root, commit, file, ChangeScope::All).await
+    }
+
+    pub async fn diff_scoped(
+        &self,
+        root: &Path,
+        commit: Option<&str>,
+        file: &ChangedFile,
+        scope: ChangeScope,
+    ) -> Result<String> {
         let output = if let Some(id) = commit {
             self.run(
                 Some(root),
@@ -357,21 +675,54 @@ impl Git {
                     .collect::<String>()
             ));
         } else {
-            self.run(
-                Some(root),
-                vec![
-                    OsString::from("diff"),
-                    "--no-ext-diff".into(),
-                    "--no-textconv".into(),
-                    "HEAD".into(),
-                    "--".into(),
-                    file.path.clone().into(),
-                ],
-            )
-            .await?
+            let mut args: Vec<OsString> =
+                ["diff", "--no-ext-diff", "--no-textconv", "--no-renames"]
+                    .into_iter()
+                    .map(OsString::from)
+                    .collect();
+            match scope {
+                ChangeScope::Staged => args.push("--cached".into()),
+                ChangeScope::Working => {}
+                ChangeScope::All => {
+                    let head = self
+                        .run(Some(root), ["rev-parse", "--verify", "HEAD"])
+                        .await;
+                    if let Ok(head) = head {
+                        args.push(String::from_utf8_lossy(&head).trim().into());
+                    } else {
+                        args.push(self.empty_tree(root).await?.into());
+                    }
+                }
+            }
+            args.push("--".into());
+            args.push(file.path.clone().into());
+            if let Some(original) = &file.original_path {
+                args.push(original.into());
+            }
+            self.run(Some(root), args).await?
         };
         anyhow::ensure!(output.len() <= 2 * 1024 * 1024, "差异过大，暂不展开内容");
         Ok(String::from_utf8_lossy(&output).into())
+    }
+
+    async fn empty_tree(&self, root: &Path) -> Result<String> {
+        let output = self
+            .run(Some(root), ["hash-object", "-t", "tree", "--stdin"])
+            .await?;
+        Ok(String::from_utf8_lossy(&output).trim().into())
+    }
+}
+
+async fn drain_capped(mut reader: impl AsyncRead + Unpin) -> Result<Vec<u8>> {
+    let mut output = Vec::new();
+    let mut buffer = [0; 8192];
+    loop {
+        let count = reader.read(&mut buffer).await?;
+        if count == 0 {
+            return Ok(output);
+        }
+        let keep = count.min((64 * 1024_usize).saturating_sub(output.len()));
+        output.extend_from_slice(&buffer[..keep]);
     }
 }
 
@@ -390,12 +741,6 @@ fn find_on_path() -> Option<PathBuf> {
     std::env::split_paths(&path)
         .map(|dir| dir.join(if cfg!(windows) { "git.exe" } else { "git" }))
         .find(|file| file.is_file())
-}
-fn text_lines(bytes: &[u8]) -> Vec<String> {
-    String::from_utf8_lossy(bytes)
-        .lines()
-        .map(str::to_owned)
-        .collect()
 }
 fn parse_log(bytes: &[u8]) -> Vec<Commit> {
     let fields: Vec<_> = bytes.split(|b| *b == 0).collect();
@@ -589,7 +934,7 @@ mod tests {
             );
             git.run(Some(root), ["add", "--", "."]).await.unwrap();
             git.run(Some(root), commit).await.unwrap();
-            let initial = git.open(root).await.unwrap().commits.remove(0);
+            let initial = git.open(root).await.unwrap().commits[0].clone();
             assert!(initial.parents.is_empty());
             assert!(
                 git.image_file(root, Some(&initial.id), "missing.png")

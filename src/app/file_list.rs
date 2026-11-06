@@ -8,15 +8,25 @@ pub(super) enum ChangeRow {
 
 // Only lightweight source indices are flattened here. GPUI creates elements
 // for the visible range, including headers, in one shared scroll viewport.
+#[cfg(test)]
 pub(super) fn change_rows(
     files: &[ChangedFile],
     query: &str,
     collapsed: [bool; 2],
 ) -> Vec<ChangeRow> {
+    scoped_change_rows(files, query, collapsed, crate::git::ChangeScope::All)
+}
+
+pub(super) fn scoped_change_rows(
+    files: &[ChangedFile],
+    query: &str,
+    collapsed: [bool; 2],
+    scope: crate::git::ChangeScope,
+) -> Vec<ChangeRow> {
     let query = query.to_lowercase();
     let mut groups = [Vec::new(), Vec::new()];
     for (index, file) in files.iter().enumerate() {
-        if file.path.to_lowercase().contains(&query) {
+        if scope.includes(file) && file.path.to_lowercase().contains(&query) {
             groups[usize::from(file.status == "??")].push(index);
         }
     }

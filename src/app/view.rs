@@ -1,5 +1,5 @@
 use super::controls;
-use super::file_list::{ChangeRow, change_rows};
+use super::file_list::{ChangeRow, scoped_change_rows};
 use super::*;
 use gpui_kit::component::{
     Icon,
@@ -10,25 +10,49 @@ use gpui_kit::component::{
 };
 
 impl GitPanel {
-    pub(super) fn filter_history(&mut self, cx: &Context<Self>) {
+    pub(super) fn filter_history(&mut self, cx: &mut Context<Self>) {
         let query = self.history_search.read(cx).value().to_lowercase();
-        self.history_indices = self
-            .repository
-            .as_ref()
-            .map(|repo| {
-                repo.commits
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, c)| {
-                        query.is_empty()
-                            || format!("{} {} {}", c.subject, c.author, c.id)
-                                .to_lowercase()
-                                .contains(&query)
-                    })
-                    .map(|(i, _)| i)
-                    .collect()
-            })
-            .unwrap_or_default();
+        self.history_filter_generation = self.history_filter_generation.wrapping_add(1);
+        self.history_filter_task = None;
+        self.history_filtering = false;
+        let Some(repository) = self.repository.clone() else {
+            self.history_indices = Vec::new();
+            return;
+        };
+        if query.is_empty() {
+            self.history_indices = (0..repository.commits.len()).collect();
+            return;
+        }
+        self.history_filtering = true;
+        // Existing indices may belong to the old history after a ref change.
+        self.history_indices.clear();
+        let generation = self.history_filter_generation;
+        let executor = cx.background_executor().clone();
+        self.history_filter_task = Some(cx.spawn(async move |this, cx| {
+            executor.timer(std::time::Duration::from_millis(150)).await;
+            let indices = executor
+                .spawn(async move {
+                    repository
+                        .commits
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, c)| {
+                            c.subject.to_lowercase().contains(&query)
+                                || c.author.to_lowercase().contains(&query)
+                                || c.id.to_lowercase().contains(&query)
+                        })
+                        .map(|(index, _)| index)
+                        .collect()
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.history_filter_generation == generation {
+                    this.history_indices = indices;
+                    this.history_filtering = false;
+                    cx.notify();
+                }
+            });
+        }));
     }
 
     pub(super) fn welcome(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -81,6 +105,17 @@ impl GitPanel {
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
                     .child("尚未打开项目"),
+            );
+        } else {
+            recent = recent.child(
+                controls::button("clear-recent")
+                    .ghost()
+                    .label("清除最近记录")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.config.recent_projects.clear();
+                        this.save(cx);
+                        cx.notify();
+                    })),
             );
         }
         h_flex()
@@ -166,7 +201,10 @@ impl GitPanel {
             .rsplit_once('/')
             .unwrap_or(("", file.path.as_str()));
         let selected = self.detail_open
-            && self.selected_file == Some(index)
+            && self
+                .selected_file
+                .and_then(|i| self.files.get(i))
+                .is_some_and(|selected| selected.path == file.path)
             && self.selected_commit.is_none() == working;
         let full_path = self
             .repository
@@ -238,10 +276,28 @@ impl GitPanel {
                     .child(file.status.trim().replace("??", "U")),
             )
             .tooltip(move |window, cx| Tooltip::new(full_path.clone()).build(window, cx))
-            .on_click(cx.listener(move |this, _, _, cx| {
+            .when(working, |view| {
+                let counts = self.statistics.files.get(&file.path);
+                view.child(
+                    div()
+                        .flex_shrink_0()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(if self.statistics_pending {
+                            "…".to_string()
+                        } else if let Some(Some((added, removed))) = counts {
+                            format!("+{added} −{removed}")
+                        } else {
+                            "—".into()
+                        }),
+                )
+            })
+            .on_click(cx.listener(move |this, _, window, cx| {
                 if working {
+                    this.changes_focus.focus(window, cx);
                     this.select_change(index, cx);
                 } else {
+                    this.files_focus.focus(window, cx);
                     this.select_file(index, cx);
                 }
             }))
@@ -395,7 +451,12 @@ impl GitPanel {
     pub(super) fn workspace(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let repo = self.repository.as_ref().unwrap();
         let file_query = self.file_search.read(cx).value();
-        let file_rows = change_rows(&repo.changes, &file_query, self.collapsed_change_groups);
+        let file_rows = scoped_change_rows(
+            &repo.changes,
+            &file_query,
+            self.collapsed_change_groups,
+            self.change_scope,
+        );
         let file_groups = uniform_list(
             "working-files",
             file_rows.len(),
@@ -415,13 +476,25 @@ impl GitPanel {
                     .collect::<Vec<_>>()
             }),
         )
+        .track_scroll(&self.changes_scroll)
         .flex_1()
         .w_full()
         .min_h_0();
         let left = v_flex()
+            .track_focus(&self.changes_focus)
             .size_full()
             .min_w_0()
             .bg(cx.theme().sidebar)
+            .when(!repo.operation_states.is_empty(), |view| {
+                view.child(
+                    div()
+                        .px_3()
+                        .py_2()
+                        .text_xs()
+                        .text_color(cx.theme().warning)
+                        .child(repo.operation_states.join(" · ")),
+                )
+            })
             .child(
                 h_flex()
                     .h(px(controls::TOOLBAR_HEIGHT))
@@ -456,10 +529,55 @@ impl GitPanel {
             )
             .when(!self.stash_tab, |view| {
                 view.child(
+                    div().px_2().pt_1().child(
+                        controls::segmented("change-scope")
+                            .selected_index(match self.change_scope {
+                                ChangeScope::All => 0,
+                                ChangeScope::Working => 1,
+                                ChangeScope::Staged => 2,
+                            })
+                            .child(Tab::new().label("全部"))
+                            .child(Tab::new().label("未暂存"))
+                            .child(Tab::new().label("已暂存"))
+                            .on_click(cx.listener(|this, index: &usize, _, cx| {
+                                this.change_scope = match index {
+                                    1 => ChangeScope::Working,
+                                    2 => ChangeScope::Staged,
+                                    _ => ChangeScope::All,
+                                };
+                                this.update_statistics(true, cx);
+                                cx.notify();
+                            })),
+                    ),
+                )
+                .child(
                     div()
                         .px(px(8.))
                         .py(px(6.))
                         .child(controls::search_input(&self.file_search)),
+                )
+                .child(
+                    div()
+                        .px_3()
+                        .pb_1()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(if self.statistics_pending {
+                            "正在计算增删行数…".to_string()
+                        } else if self.statistics_error.is_some() {
+                            "统计暂不可用，稍后自动重试".into()
+                        } else {
+                            format!(
+                                "+{} −{}{}",
+                                self.statistics.added,
+                                self.statistics.removed,
+                                if self.statistics.incomplete {
+                                    " · 部分文件无文本统计"
+                                } else {
+                                    ""
+                                }
+                            )
+                        }),
                 )
             })
             .child(if self.stash_tab {
@@ -467,11 +585,49 @@ impl GitPanel {
                     .id("stash-list")
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
-                    .p(px(12.))
-                    .gap(px(12.))
                     .text_sm()
-                    .children(repo.stashes.iter().map(|s| div().child(s.clone())))
+                    .child(
+                        uniform_list(
+                            "stash-items",
+                            repo.stashes.len(),
+                            cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
+                                range
+                                    .map(|index| {
+                                        let stash =
+                                            &this.repository.as_ref().unwrap().stashes[index];
+                                        let selected = this
+                                            .selected_commit
+                                            .as_ref()
+                                            .is_some_and(|commit| commit.id == stash.id);
+                                        v_flex()
+                                            .id(("stash", index))
+                                            .h(px(56.))
+                                            .px_3()
+                                            .py_2()
+                                            .gap_1()
+                                            .when(selected, |view| view.bg(cx.theme().list_active))
+                                            .hover(|view| view.bg(cx.theme().list_hover))
+                                            .child(div().truncate().child(stash.subject.clone()))
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(cx.theme().muted_foreground)
+                                                    .child(format!(
+                                                        "{} · {}",
+                                                        stash.selector, stash.date
+                                                    )),
+                                            )
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.select_stash(index, cx)
+                                            }))
+                                    })
+                                    .collect::<Vec<_>>()
+                            }),
+                        )
+                        .flex_1()
+                        .w_full()
+                        .min_h_0(),
+                    )
                     .when(repo.stashes.is_empty(), |view| {
                         view.child(
                             div()
@@ -510,10 +666,35 @@ impl GitPanel {
         );
         // Filtered rows are not adjacent commits: never draw misleading edges.
         let graph_progress = if query_empty { graph_progress } else { 0. };
-        let graph_width =
-            (repo.graph.iter().map(|row| row.width).max().unwrap_or(1) as f32 * 14. + 16.).max(40.);
+        let graph_width = (repo.graph_width as f32 * 14. + 16.).max(40.);
         let graph_slot_width = (graph_width + 12.) * graph_progress;
         let history = v_flex()
+            .track_focus(&self.history_focus)
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if !this.history_focus.is_focused(window) {
+                    return;
+                }
+                let current = this.selected_commit.as_ref().and_then(|selected| {
+                    this.history_indices.iter().position(|index| {
+                        this.repository.as_ref().unwrap().commits[*index].id == selected.id
+                    })
+                });
+                let count = this.history_indices.len();
+                if count == 0 {
+                    return;
+                }
+                let position = match event.keystroke.key.as_str() {
+                    "down" => current.map_or(0, |i| (i + 1).min(count - 1)),
+                    "up" => current.unwrap_or(0).saturating_sub(1),
+                    "home" => 0,
+                    "end" => count - 1,
+                    _ => return,
+                };
+                this.select_commit(this.history_indices[position], cx);
+                this.history_scroll
+                    .scroll_to_item(position, ScrollStrategy::Nearest);
+                cx.stop_propagation();
+            }))
             .size_full()
             .min_h_0()
             .bg(cx.theme().background)
@@ -526,12 +707,33 @@ impl GitPanel {
                     .border_b_1()
                     .border_color(cx.theme().border)
                     .bg(cx.theme().sidebar)
-                    .child(div().text_sm().font_medium().child("历史"))
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_medium()
+                            .child(format!("历史 · {}", repo.history_scope.label())),
+                    )
                     .child(
                         div()
                             .text_size(px(11.))
                             .text_color(cx.theme().muted_foreground)
-                            .child(format!("已加载 {} 条", repo.commits.len())),
+                            .child(format!(
+                                "已加载 {} 条{}",
+                                repo.commits.len(),
+                                if self.history_filtering {
+                                    " · 搜索中…"
+                                } else if self.history_loading {
+                                    " · 加载中…"
+                                } else if repo.history_pending {
+                                    " · 有新历史，回到顶部自动更新"
+                                } else if repo.history_complete {
+                                    " · 已到底"
+                                } else if !query_empty {
+                                    " · 搜索已加载记录"
+                                } else {
+                                    " · 向下滚动加载更多"
+                                }
+                            )),
                     )
                     .child(div().flex_1())
                     .child(
@@ -576,6 +778,14 @@ impl GitPanel {
                     "history",
                     self.history_indices.len(),
                     cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
+                        this.history_near_end =
+                            range.end.saturating_add(40) >= this.history_indices.len();
+                        if this.history_near_end {
+                            let entity = cx.entity().downgrade();
+                            cx.defer(move |cx| {
+                                let _ = entity.update(cx, |this, cx| this.load_more_history(cx));
+                            });
+                        }
                         let repo = this.repository.as_ref().unwrap();
                         range
                             .map(|position| {
@@ -602,11 +812,18 @@ impl GitPanel {
                                     .h(px(32.))
                                     .px(px(12.))
                                     .when(
-                                        this.selected_commit == Some(index) && this.detail_open,
+                                        this.selected_commit
+                                            .as_ref()
+                                            .is_some_and(|c| c.id == commit.id)
+                                            && this.detail_open,
                                         |row| row.bg(cx.theme().list_active),
                                     )
                                     .when(
-                                        this.selected_commit != Some(index) || !this.detail_open,
+                                        !this
+                                            .selected_commit
+                                            .as_ref()
+                                            .is_some_and(|c| c.id == commit.id)
+                                            || !this.detail_open,
                                         |row| row.hover(|style| style.bg(cx.theme().list_hover)),
                                     )
                                     .child(
@@ -643,18 +860,30 @@ impl GitPanel {
                                             .text_color(cx.theme().muted_foreground)
                                             .child(commit.date.clone()),
                                     )
-                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.history_focus.focus(window, cx);
                                         this.select_commit(index, cx)
                                     }))
                             })
                             .collect::<Vec<_>>()
                     }),
                 )
+                .track_scroll(&self.history_scroll)
                 .flex_1()
                 .w_full()
                 .min_h_0(),
-            );
-        let selected = self.selected_commit.and_then(|i| repo.commits.get(i));
+            )
+            .when_some(self.history_error.clone(), |view, error| {
+                view.child(
+                    div()
+                        .px_3()
+                        .py_1()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(format!("继续读取历史失败，稍后自动重试：{error}")),
+                )
+            });
+        let selected = self.selected_commit.as_ref();
         let heading = selected
             .map(|c| c.subject.clone())
             .unwrap_or_else(|| "本地更改".into());
@@ -668,7 +897,12 @@ impl GitPanel {
                     c.parents.first().map(|s| &s[..7]).unwrap_or("空树")
                 )
             })
-            .unwrap_or_else(|| "相对 HEAD · 工作区与暂存区的合计更改".into());
+            .unwrap_or_else(|| {
+                format!(
+                    "{} · 打开时的快照；重新选择查看最新内容",
+                    self.detail_change_scope.label()
+                )
+            });
         let detail = v_flex()
             .size_full()
             .min_h_0()
@@ -699,9 +933,29 @@ impl GitPanel {
                                     .text_size(px(11.))
                                     .text_color(cx.theme().muted_foreground)
                                     .truncate()
-                                    .child(meta),
+                                    .child(format!("{meta} · {} 个文件", self.files.len())),
                             ),
                     )
+                    .when(selected.is_some() && !self.commit_body.is_empty(), |view| {
+                        view.child(
+                            controls::button("commit-message")
+                                .ghost()
+                                .label("完整说明")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    let body = this.commit_body.clone();
+                                    window.open_dialog(cx, move |dialog, _, _| {
+                                        dialog.title("提交说明").w(px(640.)).centered().child(
+                                            div()
+                                                .id("commit-body")
+                                                .max_h(px(420.))
+                                                .overflow_y_scroll()
+                                                .text_sm()
+                                                .child(body.clone()),
+                                        )
+                                    });
+                                })),
+                        )
+                    })
                     .child(
                         controls::icon_button("close-detail", IconName::Close)
                             .tooltip("关闭详情")
@@ -731,6 +985,7 @@ impl GitPanel {
                                         .collect::<Vec<_>>()
                                 }),
                             )
+                            .track_focus(&self.files_focus)
                             .w(px(205.))
                             .flex_shrink_0()
                             .border_r_1()
@@ -759,6 +1014,34 @@ impl GitPanel {
                                                 .map(|f| f.path.clone())
                                                 .unwrap_or_default(),
                                         ),
+                                    )
+                                    .when(
+                                        self.image_diff.is_none() && self.diff_message.is_empty(),
+                                        |view| {
+                                            view.child(
+                                                controls::icon_button(
+                                                    "previous-change",
+                                                    IconName::ChevronUp,
+                                                )
+                                                .tooltip("上一处变化")
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.diff.update(cx, |diff, cx| {
+                                                        diff.previous_change(cx)
+                                                    })
+                                                })),
+                                            )
+                                            .child(
+                                                controls::icon_button(
+                                                    "next-change",
+                                                    IconName::ChevronDown,
+                                                )
+                                                .tooltip("下一处变化")
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.diff
+                                                        .update(cx, |diff, cx| diff.next_change(cx))
+                                                })),
+                                            )
+                                        },
                                     ),
                             )
                             .when(!self.diff_message.is_empty(), |view| {
@@ -785,9 +1068,20 @@ impl GitPanel {
             .w_full()
             .child(
                 h_resizable("workspace-layout")
+                    .on_resize(cx.listener(
+                        |this,
+                         state: &Entity<gpui_kit::component::resizable::ResizableState>,
+                         _,
+                         cx| {
+                            if let Some(width) = state.read(cx).sizes().first() {
+                                this.config.file_panel_width = f32::from(*width).clamp(200., 460.);
+                                this.save(cx);
+                            }
+                        },
+                    ))
                     .child(
                         resizable_panel()
-                            .size(px(292.))
+                            .size(px(self.config.file_panel_width.clamp(200., 460.)))
                             .size_range(px(200.)..px(460.))
                             .fixed()
                             .child(left),
@@ -795,6 +1089,22 @@ impl GitPanel {
                     .child(
                         resizable_panel().child(
                             v_resizable("history-detail-layout")
+                                .on_resize(cx.listener(
+                                    |this,
+                                     state: &Entity<
+                                        gpui_kit::component::resizable::ResizableState,
+                                    >,
+                                     _,
+                                     cx| {
+                                        if this.detail_open
+                                            && let Some(height) = state.read(cx).sizes().get(1)
+                                        {
+                                            this.config.detail_panel_height =
+                                                f32::from(*height).clamp(200., 800.);
+                                            this.save(cx);
+                                        }
+                                    },
+                                ))
                                 .child(
                                     resizable_panel()
                                         .size_range(px(160.)..px(2000.))
@@ -802,7 +1112,7 @@ impl GitPanel {
                                 )
                                 .child(
                                     resizable_panel()
-                                        .size(px(310.))
+                                        .size(px(self.config.detail_panel_height.clamp(200., 800.)))
                                         .size_range(px(200.)..px(800.))
                                         .fixed()
                                         .visible(self.detail_open)

@@ -34,6 +34,9 @@ pub struct Config {
     pub appearance: Appearance,
     pub motion: MotionPreference,
     pub history_display: HistoryDisplay,
+    pub file_panel_width: f32,
+    pub detail_panel_height: f32,
+    pub updates: crate::update::Preferences,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -68,6 +71,9 @@ impl Default for Config {
             appearance: Appearance::System,
             motion: MotionPreference::default(),
             history_display: HistoryDisplay::default(),
+            file_panel_width: 292.,
+            detail_panel_height: 310.,
+            updates: crate::update::Preferences::default(),
         }
     }
 }

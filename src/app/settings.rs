@@ -17,6 +17,11 @@ impl Render for SettingsView {
 
 impl GitPanel {
     pub(super) fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.updates.mirror_input = Some(cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Release 镜像 HTTPS 前缀（可选）")
+                .default_value(self.config.updates.mirror.clone())
+        }));
         let parent = cx.entity();
         let content = cx.new(|cx| {
             cx.observe(&parent, |_, _, cx| cx.notify()).detach();
@@ -37,7 +42,13 @@ impl GitPanel {
                 .entrance(DialogEntrance::Fade)
                 .overlay_closable(false)
                 .keyboard(true)
-                .child(content.clone())
+                .child(
+                    div()
+                        .id("settings-scroll")
+                        .max_h(px(420.))
+                        .overflow_y_scroll()
+                        .child(content.clone()),
+                )
                 .footer(
                     h_flex().w_full().justify_end().child(
                         controls::button("settings-done")
@@ -176,6 +187,7 @@ impl GitPanel {
                         )
                     }),
             )
+            .child(self.update_settings(cx))
             .child(
                 v_flex()
                     .gap(px(4.))

@@ -2138,15 +2138,18 @@ dependencies = [
  "futures-lite",
  "gpui-kit",
  "image",
- "notify",
  "resvg 0.46.0",
+ "semver",
  "serde",
  "serde_json",
+ "sha2 0.11.1",
  "tempfile",
  "thiserror 2.0.21",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "url",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
