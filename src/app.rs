@@ -1,0 +1,701 @@
+use crate::{
+    config::{Appearance, Config, ConfigStore},
+    git::{ChangedFile, Git, Repository},
+};
+use gpui_kit::component::input::{InputEvent, InputState};
+use gpui_kit::component::{
+    ActiveTheme, Disableable, IconName, Sizable, StyledExt, ThemeMode, WindowExt,
+    button::ButtonVariants,
+    diff::{Diff, DiffMode, DiffState},
+    h_flex,
+    menu::{DropdownMenu, PopupMenuItem},
+    v_flex,
+};
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::*;
+use std::path::PathBuf;
+
+mod branch_picker;
+mod controls;
+mod diff_data;
+#[cfg(all(test, feature = "ui-tests"))]
+mod diff_tests;
+mod file_list;
+mod image_diff;
+#[cfg(all(test, feature = "ui-tests"))]
+mod memory_tests;
+mod settings;
+mod title_bar;
+mod view;
+
+gpui_kit::actions!(githly, [OpenProject, Refresh, OpenSettings]);
+
+pub struct GitPanel {
+    store: ConfigStore,
+    config: Config,
+    config_error: Option<String>,
+    git: Option<Git>,
+    repository: Option<Repository>,
+    error: Option<String>,
+    detecting: bool,
+    loading: bool,
+    stash_tab: bool,
+    collapsed_change_groups: [bool; 2],
+    selected_commit: Option<usize>,
+    selected_file: Option<usize>,
+    files: Vec<ChangedFile>,
+    detail_files_scroll: UniformListScrollHandle,
+    diff: Entity<DiffState>,
+    image_diff: Option<image_diff::ImageDiff>,
+    diff_message: String,
+    detail_title: String,
+    generation: u64,
+    detect_task: Option<Task<()>>,
+    load_task: Option<Task<()>>,
+    detail_task: Option<Task<()>>,
+    diff_task: Option<Task<()>>,
+    save_task: Option<Task<()>>,
+    last_read: Option<String>,
+    focus: FocusHandle,
+    initial_project: Option<PathBuf>,
+    file_search: Entity<InputState>,
+    branch_picker: Entity<branch_picker::BranchPicker>,
+    history_search: Entity<InputState>,
+    history_indices: Vec<usize>,
+    detail_open: bool,
+}
+
+impl GitPanel {
+    pub fn new(
+        store: ConfigStore,
+        config: Config,
+        config_error: Option<String>,
+        initial_project: Option<PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let initial_project = initial_project.or_else(|| config.active_project.clone());
+        let file_search = cx.new(|cx| InputState::new(window, cx).placeholder("按路径筛选更改"));
+        let history_search =
+            cx.new(|cx| InputState::new(window, cx).placeholder("搜索说明、作者、哈希"));
+        cx.subscribe(&file_search, |_, _, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Change) {
+                cx.notify();
+            }
+        })
+        .detach();
+        cx.subscribe(&history_search, |this, _, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Change) {
+                this.filter_history(cx);
+                cx.notify();
+            }
+        })
+        .detach();
+        let mut panel = Self {
+            store,
+            config,
+            config_error,
+            git: None,
+            repository: None,
+            error: None,
+            detecting: false,
+            loading: false,
+            stash_tab: false,
+            collapsed_change_groups: [false; 2],
+            selected_commit: None,
+            selected_file: None,
+            files: Vec::new(),
+            detail_files_scroll: UniformListScrollHandle::new(),
+            diff: cx.new(|cx| DiffState::new([], cx).with_mode(DiffMode::Split)),
+            image_diff: None,
+            diff_message: String::new(),
+            detail_title: String::new(),
+            generation: 0,
+            detect_task: None,
+            load_task: None,
+            detail_task: None,
+            diff_task: None,
+            save_task: None,
+            last_read: None,
+            focus: cx.focus_handle(),
+            initial_project,
+            file_search,
+            branch_picker: cx.new(|cx| branch_picker::BranchPicker::new(window, cx)),
+            history_search,
+            history_indices: Vec::new(),
+            detail_open: false,
+        };
+        panel.focus.focus(window, cx);
+        panel.detect_git(panel.config.git_path.clone(), false, cx);
+        panel.save(cx);
+        panel
+    }
+
+    fn save(&mut self, cx: &mut Context<Self>) {
+        // A damaged or newer configuration is never silently overwritten.
+        if self.config_error.is_some() {
+            return;
+        }
+        let store = self.store.clone();
+        let config = self.config.clone();
+        let previous = self.save_task.take();
+        let executor = cx.background_executor().clone();
+        self.save_task = Some(cx.spawn(async move |this, cx| {
+            if let Some(previous) = previous {
+                previous.await;
+            }
+            let task = executor.spawn(async move { store.save(&config) });
+            if let Err(error) = task.await {
+                let _ = this.update(cx, |this, cx| {
+                    this.error = Some(format!("保存配置失败：{error:#}"));
+                    cx.notify();
+                });
+            }
+        }));
+    }
+
+    fn detect_git(&mut self, path: Option<PathBuf>, persist: bool, cx: &mut Context<Self>) {
+        self.detecting = true;
+        self.error = None;
+        let selected = path.clone();
+        let task = cx.background_spawn(async move { Git::detect(path).await });
+        self.detect_task = Some(cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |this, cx| {
+                this.detecting = false;
+                match result {
+                    Ok(git) => {
+                        this.git = Some(git);
+                        if persist {
+                            this.config.git_path = selected;
+                            this.save(cx);
+                        }
+                        if let Some(project) = this.initial_project.take() {
+                            this.load_project(project, cx);
+                        }
+                    }
+                    Err(error) => {
+                        this.error = Some(format!("{error:#}"));
+                    }
+                }
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+
+    fn choose_path(&mut self, executable: bool, cx: &mut Context<Self>) {
+        let receiver = cx.prompt_for_paths(PathPromptOptions {
+            files: executable,
+            directories: !executable,
+            multiple: false,
+            prompt: Some(
+                if executable {
+                    "选择 git.exe"
+                } else {
+                    "加载项目"
+                }
+                .into(),
+            ),
+        });
+        cx.spawn(async move |this, cx| match receiver.await {
+            Ok(Ok(Some(paths))) => {
+                if let Some(path) = paths.into_iter().next() {
+                    let _ = this.update(cx, |this, cx| {
+                        if executable {
+                            this.detect_git(Some(path), true, cx);
+                        } else {
+                            this.load_project(path, cx);
+                        }
+                    });
+                }
+            }
+            Ok(Err(error)) => {
+                let _ = this.update(cx, |this, cx| {
+                    this.error = Some(error.to_string());
+                    cx.notify();
+                });
+            }
+            _ => {}
+        })
+        .detach();
+    }
+
+    fn clear_detail(&mut self, cx: &mut Context<Self>) {
+        self.detail_open = false;
+        self.generation += 1;
+        self.detail_task = None;
+        self.diff_task = None;
+        self.files = Vec::new();
+        self.detail_files_scroll
+            .scroll_to_item(0, ScrollStrategy::Top);
+        self.selected_commit = None;
+        self.selected_file = None;
+        self.diff.update(cx, |diff, cx| diff.set_files([], cx));
+        self.clear_image_diff(cx);
+        self.diff_message.clear();
+        self.detail_title.clear();
+    }
+
+    fn clear_image_diff(&mut self, cx: &mut Context<Self>) {
+        if let Some(images) = self.image_diff.take() {
+            cx.defer(move |cx| {
+                for window in cx.windows() {
+                    let _ = window.update(cx, |_, window, _| images.release_textures(window));
+                }
+            });
+        }
+    }
+
+    fn close_detail(&mut self, cx: &mut Context<Self>) {
+        self.clear_detail(cx);
+        // set_files([]) releases document data and cancels presentation work.
+        // Dropping the old state also releases retained layout/selection capacity.
+        self.diff = cx.new(|cx| DiffState::new([], cx).with_mode(DiffMode::Split));
+        self.detail_files_scroll = UniformListScrollHandle::new();
+    }
+
+    fn load_project(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        let Some(git) = self.git.clone() else {
+            return;
+        };
+        self.clear_detail(cx);
+        self.repository = None;
+        self.loading = true;
+        self.error = None;
+        self.stash_tab = false;
+        let task = cx.background_spawn(async move { git.open(&path).await });
+        self.load_task = Some(cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |this, cx| {
+                this.loading = false;
+                match result {
+                    Ok(repository) => {
+                        this.config.remember_project(&repository.root);
+                        let has_commits = !repository.commits.is_empty();
+                        this.branch_picker.update(cx, |picker, cx| {
+                            picker.set_branches(repository.branches.clone(), cx);
+                        });
+                        this.repository = Some(repository);
+                        this.filter_history(cx);
+                        this.last_read =
+                            Some(chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
+                        this.save(cx);
+                        if has_commits {
+                            this.select_commit(0, cx);
+                        }
+                    }
+                    Err(error) => {
+                        this.error = Some(format!("{error:#}"));
+                    }
+                }
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+
+    fn select_commit(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(repository) = &self.repository else {
+            return;
+        };
+        let Some(commit) = repository.commits.get(index).cloned() else {
+            return;
+        };
+        let root = repository.root.clone();
+        let Some(git) = self.git.clone() else {
+            return;
+        };
+        self.clear_detail(cx);
+        self.selected_commit = Some(index);
+        self.detail_open = true;
+        self.detail_title = format!(
+            "{}   ·   {}   {}   {}",
+            commit.subject, commit.short_id, commit.author, commit.date
+        );
+        self.diff_message = "正在读取文件…".into();
+        let generation = self.generation;
+        let task = cx.background_spawn(async move { git.commit_files(&root, &commit.id).await });
+        self.detail_task = Some(cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |this, cx| {
+                if this.generation != generation {
+                    return;
+                }
+                match result {
+                    Ok(files) => {
+                        this.files = files;
+                        if this.files.is_empty() {
+                            this.diff_message = "此次提交没有文件差异".into();
+                        } else {
+                            this.select_file(0, cx);
+                        }
+                    }
+                    Err(error) => this.diff_message = format!("{error:#}"),
+                }
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+
+    fn select_change(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.clear_detail(cx);
+        self.detail_title = "本地更改 · 相对 HEAD".into();
+        self.detail_open = true;
+        if let Some(repository) = &self.repository {
+            self.files = repository.changes.clone();
+        }
+        self.select_file(index, cx);
+    }
+
+    fn select_file(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(repository) = &self.repository else {
+            return;
+        };
+        let Some(file) = self.files.get(index).cloned() else {
+            return;
+        };
+        let root = repository.root.clone();
+        let id = self
+            .selected_commit
+            .and_then(|index| repository.commits.get(index))
+            .map(|commit| commit.id.clone());
+        let original_revision = if let Some(index) = self.selected_commit {
+            repository
+                .commits
+                .get(index)
+                .and_then(|commit| commit.parents.first())
+                .cloned()
+        } else {
+            repository.commits.first().map(|commit| commit.id.clone())
+        };
+        let Some(git) = self.git.clone() else {
+            return;
+        };
+        self.selected_file = Some(index);
+        self.diff_message = "正在读取差异…".into();
+        self.clear_image_diff(cx);
+        self.diff.update(cx, |diff, cx| diff.set_files([], cx));
+        let generation = self.generation;
+        let task = cx.background_spawn(async move {
+            if image_diff::is_image(&file.path)
+                || file
+                    .original_path
+                    .as_deref()
+                    .is_some_and(image_diff::is_image)
+            {
+                return Ok(diff_data::Content::Image(
+                    image_diff::load(
+                        &git,
+                        &root,
+                        original_revision.as_deref(),
+                        id.as_deref(),
+                        &file,
+                    )
+                    .await,
+                ));
+            }
+            let patch = git.diff(&root, id.as_deref(), &file).await?;
+            diff_data::parse(&patch).map(diff_data::Content::Text)
+        });
+        self.diff_task = Some(cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |this, cx| {
+                if this.generation != generation || this.selected_file != Some(index) {
+                    return;
+                }
+                match result {
+                    Ok(diff_data::Content::Image(images)) => {
+                        this.diff_message.clear();
+                        this.image_diff = Some(images);
+                    }
+                    Ok(diff_data::Content::Text(files)) => {
+                        this.diff_message = if files.is_empty() {
+                            "没有可显示的文本差异".into()
+                        } else {
+                            String::new()
+                        };
+                        this.diff.update(cx, |diff, cx| diff.set_files(files, cx));
+                    }
+                    Err(error) => {
+                        this.diff_message = format!("{error:#}");
+                    }
+                }
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+
+    fn theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let dark = !cx.theme().mode.is_dark();
+        crate::theme::apply(
+            if dark {
+                ThemeMode::Dark
+            } else {
+                ThemeMode::Light
+            },
+            Some(window),
+            cx,
+        );
+        self.config.appearance = if dark {
+            Appearance::Dark
+        } else {
+            Appearance::Light
+        };
+        self.save(cx);
+        cx.notify();
+    }
+
+    fn git_controls(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        h_flex()
+            .gap_2()
+            .child(
+                controls::button("detect-git")
+                    .label("重新检测")
+                    .disabled(self.detecting)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.detect_git(this.config.git_path.clone(), false, cx)
+                    })),
+            )
+            .child(
+                controls::button("choose-git")
+                    .label("选择 Git 程序…")
+                    .disabled(self.detecting)
+                    .on_click(cx.listener(|this, _, _, cx| this.choose_path(true, cx))),
+            )
+            .child(
+                controls::button("git-website")
+                    .ghost()
+                    .label("Git 官网")
+                    .on_click(|_, _, cx| cx.open_url("https://git-scm.com/install/")),
+            )
+    }
+}
+
+impl Render for GitPanel {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let mut title = h_flex()
+            .w_full()
+            .h_full()
+            .gap_2()
+            .text_sm()
+            .child(div().font_semibold().mr_2().child("Githly"));
+        if let Some(repository) = &self.repository {
+            let root = repository.root.clone();
+            let recent_projects = self.config.recent_projects.clone();
+            let view = cx.entity().downgrade();
+            title = title.child(title_control(
+                controls::button("project-menu")
+                    .icon(IconName::Folder)
+                    .dropdown_caret(true)
+                    .ghost()
+                    .small()
+                    .label(
+                        repository
+                            .root
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .to_string(),
+                    )
+                    .tooltip(repository.root.display().to_string())
+                    .dropdown_menu(move |menu, _, _| {
+                        let open = view.clone();
+                        let close = view.clone();
+                        let mut menu = menu
+                            .max_w(px(460.))
+                            .max_h(px(420.))
+                            .scrollable(true)
+                            .label("最近打开");
+                        for project in &recent_projects {
+                            let current = *project == root;
+                            let target = project.clone();
+                            let switch = view.clone();
+                            // Include the path to distinguish projects with the same folder name.
+                            menu = menu.item(
+                                PopupMenuItem::new(project.display().to_string())
+                                    .checked(current)
+                                    .on_click(move |_, _, cx| {
+                                        if !current {
+                                            let _ = switch.update(cx, |this, cx| {
+                                                this.load_project(target.clone(), cx)
+                                            });
+                                        }
+                                    }),
+                            );
+                        }
+                        menu.separator()
+                            .item(
+                                PopupMenuItem::new("加载其他项目…").on_click(move |_, _, cx| {
+                                    let _ = open.update(cx, |this, cx| this.choose_path(false, cx));
+                                }),
+                            )
+                            .separator()
+                            .item(PopupMenuItem::new("关闭项目").on_click(move |_, _, cx| {
+                                let _ = close.update(cx, |this, cx| {
+                                    this.load_task = None;
+                                    this.clear_detail(cx);
+                                    this.repository = None;
+                                    this.config.active_project = None;
+                                    this.save(cx);
+                                    cx.notify();
+                                });
+                            }))
+                    }),
+            ));
+            let picker = self.branch_picker.clone();
+            title = title.child(title_control(
+                gpui_kit::component::popover::Popover::new("branches-popover")
+                    .p_0()
+                    .trigger(
+                        controls::button("branches")
+                            .icon(IconName::Network)
+                            .dropdown_caret(true)
+                            .ghost()
+                            .small()
+                            .label(repository.branch.clone()),
+                    )
+                    .on_open_change(move |open, window, cx| {
+                        if *open {
+                            picker.update(cx, |picker, cx| picker.focus_search(window, cx));
+                        }
+                    })
+                    .child(self.branch_picker.clone()),
+            ));
+            let (tracking_text, tracking_tip) = match &repository.tracking {
+                Some(tracking) => match tracking.counts {
+                    Some((ahead, behind)) => (
+                        format!("{}  ↑{} ↓{}", tracking.upstream, ahead, behind),
+                        format!(
+                            "待推送 {ahead} 个提交 · 待拉取 {behind} 个提交\n基于本地远程跟踪记录，不自动连接远程"
+                        ),
+                    ),
+                    None => (
+                        format!("{}  ↑— ↓—", tracking.upstream),
+                        "上游跟踪记录在本地不可用，暂时无法计算提交数量".into(),
+                    ),
+                },
+                None => (
+                    "未设置上游".into(),
+                    "当前分支没有上游跟踪关系，无法计算待推送与待拉取数量".into(),
+                ),
+            };
+            title = title.child(
+                div()
+                    .id("branch-tracking")
+                    .max_w(px(260.))
+                    .min_w_0()
+                    .text_size(px(12.))
+                    .text_color(cx.theme().muted_foreground)
+                    .truncate()
+                    .child(tracking_text)
+                    .tooltip(move |window, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(tracking_tip.clone())
+                            .build(window, cx)
+                    }),
+            );
+        }
+        title = title
+            .child(
+                div()
+                    .flex_1()
+                    .h_full()
+                    .window_control_area(WindowControlArea::Drag),
+            )
+            .when(self.repository.is_some(), |title| {
+                title.child(title_control(
+                    controls::icon_button("refresh", IconName::RefreshCw)
+                        .accessibility_label("刷新")
+                        .tooltip(format!(
+                            "刷新  F5 · 只读取本地数据 · {}",
+                            self.last_read.as_deref().unwrap_or("")
+                        ))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if let Some(repo) = &this.repository {
+                                this.load_project(repo.root.clone(), cx);
+                            }
+                        })),
+                ))
+            })
+            .child(title_control(
+                controls::icon_button(
+                    "theme",
+                    if cx.theme().mode.is_dark() {
+                        IconName::Sun
+                    } else {
+                        IconName::Moon
+                    },
+                )
+                .accessibility_label("切换明暗主题")
+                .tooltip(if cx.theme().mode.is_dark() {
+                    "切换为浅色"
+                } else {
+                    "切换为深色"
+                })
+                .on_click(cx.listener(|this, _, window, cx| this.theme(window, cx))),
+            ))
+            .child(title_control(
+                controls::icon_button("settings", IconName::Settings)
+                    .accessibility_label("设置")
+                    .tooltip("设置  Ctrl+,")
+                    .on_click(cx.listener(|this, _, window, cx| this.open_settings(window, cx))),
+            ));
+        v_flex()
+            .track_focus(&self.focus)
+            .on_action(cx.listener(|this, _: &OpenProject, _, cx| this.choose_path(false, cx)))
+            .on_action(
+                cx.listener(|this, _: &OpenSettings, window, cx| this.open_settings(window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &Refresh, _, cx| {
+                if let Some(repository) = &this.repository {
+                    this.load_project(repository.root.clone(), cx);
+                }
+            }))
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
+                if let Some(path) = paths.paths().first() {
+                    this.load_project(path.clone(), cx);
+                }
+            }))
+            .size_full()
+            .text_size(px(13.))
+            .bg(cx.theme().background)
+            .text_color(cx.theme().foreground)
+            .child(title_bar::title_bar(title, window, cx))
+            .when_some(self.config_error.clone(), |this, error| {
+                this.child(
+                    div()
+                        .p_3()
+                        .text_sm()
+                        .text_color(cx.theme().danger)
+                        .child(error),
+                )
+            })
+            .when_some(self.error.clone(), |this, error| {
+                this.child(
+                    div()
+                        .p_3()
+                        .text_sm()
+                        .text_color(cx.theme().danger)
+                        .child(error),
+                )
+            })
+            .when(self.loading, |this| {
+                this.child(div().p_4().child("正在读取项目…"))
+            })
+            .child(if self.repository.is_some() {
+                self.workspace(window, cx)
+            } else {
+                self.welcome(cx)
+            })
+    }
+}
+
+fn title_control(element: impl IntoElement) -> impl IntoElement {
+    h_flex()
+        .h_full()
+        .occlude()
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .child(element)
+}

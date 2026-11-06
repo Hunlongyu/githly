@@ -1,0 +1,26 @@
+Source: gpui-component 0.9.0 from the Cargo registry.
+License: Apache-2.0; see LICENSE-APACHE. Original sources and locale files retained.
+Selected by the root Cargo.toml [patch.crates-io] entry.
+
+Local changes (2026-11-06):
+- src/diff/mod.rs: keep ordinary split diffs at equal viewport widths in
+  horizontal-scroll mode. One shared scrollbar moves code within clipped panes;
+  headings and the center divider stay stationary. Unified and single-column
+  review surfaces retain their original scrolling behavior.
+- src/diff/selection.rs: use clipped text bounds when resolving the clicked side,
+  so overflowing text from the opposite pane cannot capture a selection.
+- src/tab/tab.rs and src/tab/tab_bar.rs: honor explicit pixel heights and
+  theme.shadow for segmented controls. Use the tab_active theme token for both
+  the stationary selection and its animated indicator, keeping their appearance
+  consistent in the compact 28 px workbench controls.
+
+Regression coverage: src/app/diff_tests.rs in the application. Run:
+cargo test --features ui-tests app::diff_tests
+
+The application now always enables soft wrap and exposes no horizontal-scroll
+setting. The library's generic non-wrapped mode remains available internally;
+application regressions verify equal panes, wrapping, selection and no horizontal
+movement at narrow and wide viewport sizes.
+
+When upgrading GPUI Kit, compare these patched files with the upstream version and
+remove this override only after the layout, scrolling and selection tests pass.

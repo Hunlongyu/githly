@@ -1,0 +1,32 @@
+// GPUI loads icon resource 1 from the executable for the native window/taskbar.
+1 ICON "githly.ico"
+
+#include "githly-version.h"
+
+// The process group and Explorer read executable metadata, not the window title.
+1 VERSIONINFO
+FILEVERSION GITHLY_VERSION
+PRODUCTVERSION GITHLY_VERSION
+FILEFLAGSMASK 0x3fL
+FILEFLAGS 0x0L
+FILEOS 0x40004L
+FILETYPE 0x1L
+FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "FileDescription", "Githly\0"
+            VALUE "ProductName", "Githly\0"
+            VALUE "InternalName", "githly\0"
+            VALUE "OriginalFilename", "githly.exe\0"
+            VALUE "FileVersion", GITHLY_VERSION_STRING "\0"
+            VALUE "ProductVersion", GITHLY_VERSION_STRING "\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END
