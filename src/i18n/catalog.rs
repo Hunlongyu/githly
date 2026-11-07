@@ -177,7 +177,7 @@ messages! {
     notes_unavailable => "此版本未提供更新说明。", "No release notes are available for this version.";
     #[cfg(windows)]
     invalid_portable_zip => "便携包缺少有效的 Githly.exe。", "The portable ZIP does not contain a valid Githly.exe.";
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     portable_updated => "便携版已在原目录更新。重新启动 Githly 即可使用新版本。", "The portable copy has been updated in place. Restart Githly to use the new version.";
     release_notes => "更新日志", "Release notes";
     install_update => "安装更新…", "Install update…";
