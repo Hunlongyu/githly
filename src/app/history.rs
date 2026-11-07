@@ -74,7 +74,7 @@ impl GitPanel {
                         cx.background_spawn(async move { drop(retired) }).detach();
                     }
                     Err(error) => {
-                        this.history_error = Some(format!("{error:#}"));
+                        this.history_error = Some(LocalizedText::diagnostic(error));
                         this.history_retry_after = Some(Instant::now() + Duration::from_secs(60));
                     }
                 }

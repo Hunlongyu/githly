@@ -1,9 +1,10 @@
 //! Release metadata and bounded downloads. All entry points run on a worker.
-use crate::i18n::messages;
+use crate::i18n::{Locale, LocalizedText};
 use anyhow::{Context, Result, ensure};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::sync::Arc;
 use std::{
     fs::File,
     io::Write,
@@ -11,6 +12,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+mod github;
 #[cfg(windows)]
 mod http;
 #[cfg(unix)]
@@ -134,31 +136,36 @@ pub struct Available {
     pub distribution: Distribution,
 }
 
-#[derive(Default)]
+#[derive(Clone, Copy, Default)]
 pub(super) struct Response {
     pub status: u32,
     pub retry_after: Option<u64>,
     pub rate_reset: Option<u64>,
 }
 pub(super) trait Fetch {
-    fn get(&mut self, url: &str, output: &mut dyn Write, limit: u64) -> Result<Response>;
+    fn get(&self, url: &str, output: &mut dyn Write, limit: u64) -> Result<Response>;
 }
 
-fn metadata(fetch: &mut impl Fetch, address: &str) -> Result<(Response, Vec<u8>)> {
+fn metadata(fetch: &impl Fetch, address: &str) -> Result<(Response, Vec<u8>)> {
     let mut bytes = Vec::new();
     let response = fetch.get(address, &mut bytes, 1024 * 1024)?;
     Ok((response, bytes))
 }
 
+fn valid_sha256(hash: &str) -> bool {
+    hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
 fn validate(manifest: &Manifest, distribution: Distribution) -> Result<Version> {
-    let version = Version::parse(&manifest.version).context(messages().invalid_version())?;
+    let version = Version::parse(&manifest.version)
+        .with_context(|| LocalizedText::new(Locale::invalid_version))?;
     ensure!(
         version.pre.is_empty() && version.build.is_empty(),
-        messages().stable_only()
+        LocalizedText::new(Locale::stable_only)
     );
     ensure!(
         manifest.notes_url == format!("{RELEASES}/tag/v{version}"),
-        messages().invalid_notes()
+        LocalizedText::new(Locale::invalid_notes)
     );
     ensure!(
         manifest.installer.url
@@ -166,119 +173,61 @@ fn validate(manifest: &Manifest, distribution: Distribution) -> Result<Version> 
                 "{RELEASES}/download/v{version}/{}",
                 distribution.package_name(&version)
             ),
-        messages().invalid_installer_url()
+        LocalizedText::new(Locale::invalid_installer_url)
     );
     ensure!(
-        manifest.installer.sha256.len() == 64
-            && manifest
-                .installer
-                .sha256
-                .bytes()
-                .all(|byte| byte.is_ascii_hexdigit()),
-        messages().invalid_checksum()
+        valid_sha256(&manifest.installer.sha256),
+        LocalizedText::new(Locale::invalid_checksum)
     );
     ensure!(
         (1..=MAX_INSTALLER).contains(&manifest.installer.size),
-        messages().installer_too_large()
+        LocalizedText::new(Locale::installer_too_large)
     );
     Ok(version)
 }
 
-#[derive(Deserialize)]
-struct Release {
-    tag_name: String,
-    draft: bool,
-    prerelease: bool,
-    body: Option<String>,
-    #[serde(default)]
-    assets: Vec<Asset>,
-}
-
-#[derive(Deserialize)]
-struct Asset {
-    browser_download_url: String,
-    size: u64,
-    digest: Option<String>,
-}
-
 pub fn check(preferences: &mut Preferences) -> Result<Option<Available>> {
     check_with(
-        &mut Http,
+        Arc::new(Http),
         preferences,
-        env!("CARGO_PKG_VERSION"),
+        self_update::cargo_crate_version!(),
         now(),
         Distribution::current()?,
     )
 }
 
 fn check_with(
-    fetch: &mut impl Fetch,
+    fetch: Arc<impl Fetch + Send + Sync + 'static>,
     preferences: &mut Preferences,
     current: &str,
     time: u64,
     distribution: Distribution,
 ) -> Result<Option<Available>> {
-    let current = Version::parse(current)?;
     let mut expected = None;
     let mut notes = String::new();
     if time >= preferences.api_retry_after {
-        match metadata(fetch, API) {
-            Ok((response, bytes)) if response.status == 200 => {
-                let release: Release =
-                    serde_json::from_slice(&bytes).context(messages().invalid_release())?;
-                ensure!(
-                    !release.draft && !release.prerelease,
-                    messages().no_release()
-                );
-                let version = Version::parse(
-                    release
-                        .tag_name
-                        .strip_prefix('v')
-                        .unwrap_or(&release.tag_name),
-                )?;
-                if version <= current {
-                    return Ok(None);
-                }
-                notes = release.body.unwrap_or_default();
-                let url = format!(
-                    "{RELEASES}/download/v{version}/{}",
-                    distribution.package_name(&version)
-                );
-                if let Some(asset) = release
-                    .assets
-                    .iter()
-                    .find(|asset| asset.browser_download_url == url)
-                    && let Some(hash) = asset
-                        .digest
-                        .as_deref()
-                        .and_then(|digest| digest.strip_prefix("sha256:"))
-                {
-                    let manifest = Manifest {
-                        version: version.to_string(),
-                        notes_url: format!("{RELEASES}/tag/v{version}"),
-                        notes,
-                        installer: Installer {
-                            url,
-                            size: asset.size,
-                            sha256: hash.into(),
-                        },
-                    };
-                    validate(&manifest, distribution)?;
-                    return Ok(Some(Available {
-                        manifest,
-                        distribution,
-                    }));
-                }
-                expected = Some(version);
+        match github::latest(fetch.clone(), distribution, current)? {
+            github::Latest::Current => return Ok(None),
+            github::Latest::Available(manifest) => {
+                validate(&manifest, distribution)?;
+                return Ok(Some(Available {
+                    manifest,
+                    distribution,
+                }));
             }
-            Ok((response, _)) if matches!(response.status, 403 | 429) => {
-                preferences.api_retry_after = response
-                    .rate_reset
-                    .unwrap_or(0)
-                    .max(time.saturating_add(response.retry_after.unwrap_or(3600)))
-                    .max(time.saturating_add(60));
+            github::Latest::NeedsManifest(release) => {
+                expected = Some(Version::parse(release.version())?);
+                notes = release.body().unwrap_or_default().to_owned();
             }
-            _ => {}
+            github::Latest::Unavailable(response) => {
+                if matches!(response.status, 403 | 429) {
+                    preferences.api_retry_after = response
+                        .rate_reset
+                        .unwrap_or(0)
+                        .max(time.saturating_add(response.retry_after.unwrap_or(3600)))
+                        .max(time.saturating_add(60));
+                }
+            }
         }
     }
 
@@ -287,35 +236,37 @@ fn check_with(
         || format!("{RELEASES}/latest/download/{name}"),
         |v| format!("{RELEASES}/download/v{v}/{name}"),
     );
-    let (response, bytes) = metadata(fetch, &url)?;
+    let (response, bytes) = metadata(fetch.as_ref(), &url)?;
     ensure!(
         response.status == 200,
-        messages().source_unavailable(response.status)
+        LocalizedText::new(|l| l.source_unavailable(response.status))
     );
-    let mut manifest: Manifest =
-        serde_json::from_slice(&bytes).context(messages().invalid_manifest())?;
+    let mut manifest: Manifest = serde_json::from_slice(&bytes)
+        .with_context(|| LocalizedText::new(Locale::invalid_manifest))?;
     let version = validate(&manifest, distribution)?;
     ensure!(
         expected.is_none_or(|expected| expected == version),
-        messages().invalid_manifest()
+        LocalizedText::new(Locale::invalid_manifest)
     );
     if !notes.is_empty() {
         manifest.notes = notes;
     }
-    Ok((version > current).then_some(Available {
-        manifest,
-        distribution,
-    }))
+    Ok(
+        self_update::version::bump_is_greater(current, &manifest.version)?.then_some(Available {
+            manifest,
+            distribution,
+        }),
+    )
 }
 
 pub fn download(available: &Available, received: &AtomicU64) -> Result<PathBuf> {
     let directory = directories::BaseDirs::new()
-        .context(messages().update_cache_dir())?
+        .with_context(|| LocalizedText::new(Locale::update_cache_dir))?
         .cache_dir()
         .join("githly")
         .join("updates");
     std::fs::create_dir_all(&directory)?;
-    download_with(&mut Http, available, &directory, received)
+    download_with(&Http, available, &directory, received)
 }
 
 struct DownloadWriter<'a> {
@@ -334,46 +285,37 @@ impl Write for DownloadWriter<'_> {
     }
 }
 
-struct PartialFile(PathBuf);
-impl Drop for PartialFile {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
-    }
-}
-
 fn download_with(
-    fetch: &mut impl Fetch,
+    fetch: &impl Fetch,
     available: &Available,
     directory: &Path,
     received: &AtomicU64,
 ) -> Result<PathBuf> {
     validate(&available.manifest, available.distribution)?;
     let direct = &available.manifest.installer.url;
-    // A single fixed cache entry bounds disk usage across versions. Unique partial
-    // files prevent a second application instance from sharing an active writer.
-    let partial = PartialFile(directory.join(format!("installer-{}.part", std::process::id())));
     let extension = Path::new(&available.manifest.installer.url)
         .extension()
         .expect("validated package URL has an extension");
     let destination = directory.join("Githly-update").with_extension(extension);
-    let mut error = anyhow::anyhow!(messages().installer_failed());
+    let mut error = anyhow::anyhow!(LocalizedText::new(Locale::installer_failed));
     for prefix in std::iter::once(&"").chain(MIRRORS) {
         let url = format!("{prefix}{direct}");
         received.store(0, Ordering::Relaxed);
         let result = (|| {
-            let mut writer = DownloadWriter {
-                file: File::create(&partial.0)?,
-                received,
-            };
+            // Separate retries and concurrent downloads never share an active writer.
+            let (file, partial) = tempfile::NamedTempFile::new_in(directory)?.into_parts();
+            let mut writer = DownloadWriter { file, received };
             let response = fetch.get(&url, &mut writer, available.manifest.installer.size)?;
             ensure!(
                 response.status == 200,
-                messages().download_http(response.status)
+                LocalizedText::new(|l| l.download_http(response.status))
             );
             writer.file.sync_all()?;
             drop(writer);
-            verify_file(&partial.0, &available.manifest.installer)?;
-            std::fs::rename(&partial.0, &destination).context(messages().installer_in_use())?;
+            verify_file(&partial, &available.manifest.installer)?;
+            self_update::Move::from_source(&partial)
+                .to_dest(&destination)
+                .with_context(|| LocalizedText::new(Locale::installer_in_use))?;
             Ok(destination.clone())
         })();
         match result {
@@ -392,7 +334,7 @@ fn verify_reader(file: &mut File, installer: &Installer) -> Result<()> {
     use std::io::Read;
     ensure!(
         file.metadata()?.len() == installer.size,
-        messages().installer_incomplete()
+        LocalizedText::new(Locale::installer_incomplete)
     );
     let mut digest = Sha256::new();
     let mut buffer = [0u8; 64 * 1024];
@@ -410,7 +352,7 @@ fn verify_reader(file: &mut File, installer: &Installer) -> Result<()> {
         .collect();
     ensure!(
         actual.eq_ignore_ascii_case(&installer.sha256),
-        messages().checksum_failed()
+        LocalizedText::new(Locale::checksum_failed)
     );
     Ok(())
 }
@@ -425,7 +367,7 @@ pub fn install(path: &Path, available: &Available) -> Result<InstallOutcome> {
     let distribution = Distribution::current()?;
     ensure!(
         distribution == available.distribution,
-        messages().invalid_installer_url()
+        LocalizedText::new(Locale::invalid_installer_url)
     );
     validate(&available.manifest, distribution)?;
     #[cfg(windows)]
@@ -434,7 +376,8 @@ pub fn install(path: &Path, available: &Available) -> Result<InstallOutcome> {
     }
     #[cfg(target_os = "linux")]
     if distribution == Distribution::Portable {
-        let image = appimage::current_path()?.context(messages().invalid_installer_url())?;
+        let image = appimage::current_path()?
+            .with_context(|| LocalizedText::new(Locale::invalid_installer_url))?;
         appimage::replace(&image, path, &available.manifest.installer)?;
         return Ok(InstallOutcome::Restart(image));
     }
@@ -447,7 +390,7 @@ pub fn install(path: &Path, available: &Available) -> Result<InstallOutcome> {
             .args(["/usr/bin/apt-get", "--yes", "--no-remove", "install"])
             .arg(path)
             .output()
-            .context(messages().installer_launch_failed())?;
+            .with_context(|| LocalizedText::new(Locale::installer_launch_failed))?;
         ensure!(
             output.status.success(),
             "apt ({}): {}",
@@ -481,7 +424,7 @@ pub fn install(path: &Path, available: &Available) -> Result<InstallOutcome> {
         }
         command
             .spawn()
-            .context(messages().installer_launch_failed())?;
+            .with_context(|| LocalizedText::new(Locale::installer_launch_failed))?;
         Ok(InstallOutcome::InstallerStarted)
     }
 }

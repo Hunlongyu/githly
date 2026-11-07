@@ -1,8 +1,8 @@
 use super::{Installer, MAX_INSTALLER, verify_reader};
-use crate::i18n::messages;
+use crate::i18n::{Locale, LocalizedText};
 use anyhow::{Context, Result, ensure};
 use std::{
-    fs::{self, File},
+    fs::File,
     io::{self, Read, Seek},
     path::{Path, PathBuf},
 };
@@ -32,18 +32,20 @@ pub(super) fn is_installed(exe: &Path) -> Result<bool> {
 
 pub(super) fn apply(archive: &Path, package: &Installer) -> Result<PathBuf> {
     let exe = std::env::current_exe()?.canonicalize()?;
-    let directory = exe.parent().context(messages().invalid_installer_url())?;
+    let directory = exe
+        .parent()
+        .with_context(|| LocalizedText::new(Locale::invalid_installer_url))?;
     let mut file = File::open(archive)?;
     verify_reader(&mut file, package)?;
     file.rewind()?;
     let mut zip = zip::ZipArchive::new(file)?;
     let entry = zip
         .by_name("Githly.exe")
-        .context(messages().invalid_portable_zip())?;
+        .with_context(|| LocalizedText::new(Locale::invalid_portable_zip))?;
     let size = entry.size();
     ensure!(
         entry.is_file() && (1..=MAX_INSTALLER).contains(&size),
-        messages().invalid_portable_zip()
+        LocalizedText::new(Locale::invalid_portable_zip)
     );
 
     // Stage on the destination volume before touching the running binary.
@@ -54,20 +56,21 @@ pub(super) fn apply(archive: &Path, package: &Installer) -> Result<PathBuf> {
     let mut output = File::create(&next)?;
     ensure!(
         io::copy(&mut entry.take(size + 1), &mut output)? == size,
-        messages().invalid_portable_zip()
+        LocalizedText::new(Locale::invalid_portable_zip)
     );
     output.sync_all()?;
     drop(output);
 
     let old = stage.path().join("previous.exe");
-    fs::rename(&exe, &old)?;
-    if let Err(error) = fs::rename(&next, &exe) {
-        if let Err(rollback) = fs::rename(&old, &exe) {
+    if let Err(error) = self_update::Move::from_source(&next)
+        .replace_using_temp(&old)
+        .to_dest(&exe)
+    {
+        // Move restores the original on failure. Retain its backup if Windows
+        // prevented rollback too.
+        if old.exists() {
             let recovery = stage.keep();
-            return Err(error).context(format!(
-                "{}: {rollback}",
-                recovery.join("previous.exe").display()
-            ));
+            return Err(error).context(recovery.join("previous.exe").display().to_string());
         }
         return Err(error.into());
     }

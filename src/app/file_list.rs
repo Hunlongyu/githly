@@ -57,7 +57,9 @@ pub(super) fn grouped_file_indices(
     let query = query.to_lowercase();
     let mut groups = [Vec::new(), Vec::new()];
     for (index, file) in files.iter().enumerate() {
-        if scope.includes(file) && super::matches_query(&file.path, &query) {
+        if scope.includes(file)
+            && (query.is_empty() || super::matches_query(&file.display_path(), &query))
+        {
             groups[usize::from(file.status == "??")].push(index);
         }
     }

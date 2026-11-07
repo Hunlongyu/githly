@@ -54,6 +54,10 @@ messages! {
     switch_light => "切换为浅色", "Switch to light theme";
     switch_dark => "切换为深色", "Switch to dark theme";
     settings => "设置", "Settings";
+    general => "通用", "General";
+    about => "关于", "About";
+    developer => "开发者", "Developer";
+    repository_link => "GitHub 仓库", "GitHub repository";
     update_available_tip => "有新版本，查看更新日志", "Update available · View release notes";
     #[cfg(not(target_os = "macos"))]
     settings_shortcut => "设置  Ctrl+,", "Settings  Ctrl+,";
@@ -69,12 +73,12 @@ messages! {
     create_config_dir => "无法创建配置目录", "Could not create the configuration directory";
     write_config => "无法写入配置", "Could not write settings";
     save_config => "无法保存配置文件", "Could not save the settings file";
-    head_to_worktree => "HEAD → 工作区", "HEAD → working tree";
-    head_to_index => "HEAD → 暂存区", "HEAD → index";
+    head_to_worktree => "当前提交 → 工作区", "HEAD → working tree";
+    head_to_index => "当前提交 → 暂存区", "HEAD → index";
     index_to_worktree => "暂存区 → 工作区", "Index → working tree";
     current_branch => "当前分支", "Current branch";
     all_branches => "全部分支", "All branches";
-    git_not_on_path => "未在系统 PATH 中找到 Git，请指定已有的 Git 程序或前往官网安装", "Git was not found on PATH. Select an installed executable or download Git from its website.";
+    git_not_on_path => "未在系统搜索路径中找到 Git，请指定已有的 Git 程序或前往官网安装", "Git was not found on PATH. Select an installed executable or download Git from its website.";
     select_git_binary => "请选择 Git 可执行文件，而不是 git-bash 或安装程序", "Select the Git executable (git.exe on Windows).";
     invalid_git_version => "所选程序没有返回有效的 Git 版本", "The selected program did not return a valid Git version";
     start_git => "无法启动 Git 程序", "Could not start Git";
@@ -86,7 +90,7 @@ messages! {
     busy_checkout => "仓库正在进行其他操作，暂不能切换分支", "Cannot switch branches during another repository operation";
     local_checkout_only => "仅支持切换已有本地分支", "Only existing local branches can be checked out";
     read_git_error => "无法读取 Git 错误", "Could not read Git errors";
-    detached_head => "分离 HEAD", "Detached HEAD";
+    detached_head => "未检出分支", "Detached HEAD";
     invalid_index_image => "暂存区图片存在冲突或不是普通文件", "The staged image is conflicted or is not a regular file";
     image_too_large => "图片超过 8 MiB，暂不预览", "Image exceeds the 8 MiB preview limit";
     invalid_image_version => "该版本不是普通图片文件", "This revision is not a regular image file";
@@ -163,14 +167,11 @@ messages! {
     system => "跟随系统", "System default";
     subtle => "轻微", "Subtle";
     off => "关闭", "Off";
-    motion_help => "轻微动效用于按钮切换、关系图和弹窗。仅影响 Githly。", "Subtle motion animates buttons, the commit graph, and dialogs in Githly.";
     detecting => "正在检测…", "Detecting…";
     git_missing => "未找到 Git", "Git not found";
-    select_installed_git => "请选择已安装的 Git 程序", "Select your Git executable";
-    use_system_path => "改用系统 PATH", "Use system PATH";
-    settings_autosave => "设置自动保存", "Settings are saved automatically";
-    loading_stash => "正在读取 Stash…", "Loading stash…";
-    empty_stash => "Stash 中没有文件变化", "This stash has no file changes";
+    use_system_path => "使用系统中的 Git", "Use system PATH";
+    loading_stash => "正在读取储藏…", "Loading stash…";
+    empty_stash => "这条储藏没有文件更改", "This stash has no file changes";
     downloading => "正在下载更新包…", "Downloading update…";
     download_verified => "更新包已下载并通过校验。", "Update downloaded and verified.";
     opening_installer => "正在校验并应用更新…", "Verifying and applying the update…";
@@ -207,7 +208,7 @@ messages! {
     all => "全部", "All";
     unstaged => "未暂存", "Unstaged";
     staged => "已暂存", "Staged";
-    no_stashes => "没有 Stash", "No stashes";
+    no_stashes => "暂无储藏", "No stashes";
     searching => " · 搜索中…", " · Searching…";
     loading => " · 加载中…", " · Loading…";
     new_history => " · 有新历史，回到顶部自动更新", " · New commits. Scroll to the top to refresh.";
@@ -225,14 +226,14 @@ messages! {
     close_details => "关闭详情", "Close details";
     previous_change => "上一处变化", "Previous change";
     next_change => "下一处变化", "Next change";
-    no_worktrees => "没有可用的 worktree", "No available worktrees";
-    loading_worktrees => "正在读取 worktree…", "Loading worktrees…";
+    no_worktrees => "没有可用的工作树", "No available worktrees";
+    loading_worktrees => "正在读取工作树…", "Loading worktrees…";
     no_more_history => "没有可继续读取的历史", "No more history to load";
     read_history => "无法读取历史输出", "Could not read history output";
     history_timeout => "读取更多历史超时", "Loading more history timed out";
     history_limit => "历史批次超过 8 MiB 读取上限", "History batch exceeds the 8 MiB read limit";
     incomplete_history => "Git 历史记录不完整", "Incomplete Git history record";
-    stash_missing => "Stash 对象不可用", "Stash object is unavailable";
+    stash_missing => "储藏记录不可用", "Stash object is unavailable";
     missing_head => "Git 未返回 HEAD 状态", "Git did not return HEAD status";
     missing_branch => "Git 未返回分支名称", "Git did not return the branch name";
     unknown_status => "无法识别 Git 文件状态", "Unrecognized Git file status";
@@ -252,7 +253,7 @@ messages! {
     #[cfg(windows)]
     request_timeout => "更新请求超时", "Update request timed out";
     language => "语言", "Language";
-    language_restart => "重启 Githly 后应用语言更改。", "Restart Githly to apply the language change.";
+    worktrees => "工作树", "Worktrees";
 }
 
 formatted_messages! {
@@ -260,7 +261,7 @@ formatted_messages! {
     last_read(path, time) => "{path}\n自动核对本地状态 · 上次读取 {time}", "{path}\nLocal status checked automatically · Last read {time}";
     upstream_counts(ahead, behind) => "待推送 {ahead} 个提交 · 待拉取 {behind} 个提交\n基于本地远程跟踪记录，不自动连接远程", "Ahead: {ahead} · Behind: {behind}\nBased on local tracking refs. Githly does not fetch automatically.";
     refresh_failed(error) => "自动刷新暂不可用，保留上次内容并稍后重试：{error}", "Automatic refresh failed. Showing the last snapshot until the next check. {error}";
-    worktree_retry(error) => "读取 worktree 列表失败，稍后自动重试：{error}", "Could not read worktrees. Githly will retry. {error}";
+    worktree_retry(error) => "读取工作树列表失败，稍后自动重试：{error}", "Could not read worktrees. Githly will retry. {error}";
     cannot_read(path) => "无法读取 {path}", "Could not read {path}";
     git_path_missing(path) => "Git 程序路径不存在：{path}", "Git executable not found at {path}";
     conflicts(conflicts) => "{conflicts} 个冲突文件", "Conflicted files: {conflicts}";
@@ -273,14 +274,16 @@ formatted_messages! {
     download_failed(error) => "下载失败：{error:#}", "Download failed: {error:#}";
     install_failed(error) => "更新失败：{error:#}", "Update failed: {error:#}";
     file_group(heading, count, state) => "{heading}，{count} 个文件，{state}", "{heading}, files: {count}, {state}";
+    stash_tab(count) => "储藏  {count}", "Stash  {count}";
     changes_tab(count) => "更改  {count}", "Changes  {count}";
     history_scope(scope) => "历史 · {scope}", "History · {scope}";
+    tag_label(name) => "标签：{name}", "tag: {name}";
     loaded_count(count, status) => "已加载 {count} 条{status}", "Loaded: {count}{status}";
     history_retry(error) => "继续读取历史失败，稍后自动重试：{error}", "Could not load more history. Githly will retry. {error}";
     parent_comparison(hash, author, date, parent) => "{hash}   {author}   {date}   相对父提交 {parent}", "{hash}   {author}   {date}   Compared with parent {parent}";
     snapshot(scope) => "{scope} · 打开时的快照；重新选择查看最新内容", "{scope} · Snapshot at open. Select again to refresh.";
     detail_file_count(meta, count) => "{meta} · {count} 个文件", "{meta} · Files: {count}";
-    worktrees_failed(error) => "读取 worktree 失败：{error:#}", "Could not read worktrees: {error:#}";
+    worktrees_failed(error) => "读取工作树失败：{error:#}", "Could not read worktrees: {error:#}";
     history_failed(status) => "Git 历史读取失败（{status}）", "Could not read Git history ({status})";
     worktree_changes(count) => "{count} 项更改", "Changes: {count}";
     unreadable(error) => "不可读取：{error}", "Cannot read: {error}";

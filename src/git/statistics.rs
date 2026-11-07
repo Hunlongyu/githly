@@ -3,14 +3,14 @@ use std::collections::HashMap;
 
 #[derive(Default)]
 pub struct LineStatistics {
-    pub files: HashMap<String, Option<(u64, u64)>>,
+    pub files: HashMap<BString, Option<(u64, u64)>>,
     pub added: u64,
     pub removed: u64,
     pub incomplete: bool,
 }
 
 impl LineStatistics {
-    fn insert(&mut self, path: String, counts: Option<(u64, u64)>) {
+    fn insert(&mut self, path: BString, counts: Option<(u64, u64)>) {
         if let Some((added, removed)) = counts {
             self.added += added;
             self.removed += removed;
@@ -80,10 +80,7 @@ impl Git {
                 .and_then(|v| std::str::from_utf8(v).ok())
                 .and_then(|v| v.parse().ok());
             if let Some(path) = fields.next() {
-                stats.insert(
-                    String::from_utf8_lossy(path).into_owned(),
-                    added.zip(removed),
-                );
+                stats.insert(path.into(), added.zip(removed));
             }
         }
         // Bound untracked-file I/O. Large/binary/remaining files keep an explicit
@@ -106,7 +103,10 @@ impl Git {
                         let counts = if budget == 0 {
                             None
                         } else {
-                            untracked_lines(&root.join(&path), &mut budget).map(|lines| (lines, 0))
+                            path.to_path()
+                                .ok()
+                                .and_then(|name| untracked_lines(&root.join(name), &mut budget))
+                                .map(|lines| (lines, 0))
                         };
                         stats.insert(path, counts);
                     }

@@ -1,5 +1,4 @@
 use super::*;
-use crate::i18n::messages;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Stash {
@@ -13,8 +12,8 @@ pub struct StashDetail {
     pub commit: Commit,
     pub files: Vec<ChangedFile>,
     pub untracked_revision: Option<String>,
-    pub untracked_paths: std::collections::HashSet<String>,
-    pub body: String,
+    pub untracked_paths: std::collections::HashSet<BString>,
+    pub body: LocalizedText,
 }
 
 pub(super) fn parse_stashes(bytes: &[u8]) -> Vec<Stash> {
@@ -53,7 +52,7 @@ impl Git {
         let commit = parse_log(&output)
             .into_iter()
             .next()
-            .context(messages().stash_missing())?;
+            .with_context(|| LocalizedText::new(Locale::stash_missing))?;
         let untracked_revision = commit.parents.get(2).cloned();
         let mut untracked_paths = std::collections::HashSet::new();
         if let Some(revision) = &untracked_revision {

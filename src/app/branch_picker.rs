@@ -103,6 +103,13 @@ impl BranchPicker {
         cx.notify();
     }
 
+    pub(super) fn update_language(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.search.update(cx, |input, cx| {
+            input.set_placeholder(messages().search_branches(), window, cx)
+        });
+        cx.notify();
+    }
+
     pub(super) fn focus_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.search.update(cx, |search, cx| {
             search.set_value("", window, cx);

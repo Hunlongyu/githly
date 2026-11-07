@@ -42,9 +42,12 @@ fn main() -> anyhow::Result<()> {
     let store = ConfigStore::for_app()?;
     let (config, error) = match store.load() {
         Ok(config) => (config, None),
-        Err(error) => (Default::default(), Some(format!("{error:#}"))),
+        Err(error) => (
+            Default::default(),
+            Some(i18n::LocalizedText::diagnostic(error)),
+        ),
     };
-    i18n::init(config.language);
+    i18n::set_language(config.language);
     let initial_project = std::env::args_os().nth(1).map(std::path::PathBuf::from);
     #[cfg(unix)]
     let Some(instance) = unix_instance::claim_or_forward(initial_project.as_deref())
@@ -60,7 +63,6 @@ fn main() -> anyhow::Result<()> {
     };
     application().with_assets(AppAssets).run(move |cx| {
         init(cx);
-        gpui_kit::component::set_locale(i18n::messages().tag());
         motion::init(config.motion, cx);
         cx.set_app_identity("com.hunlongyu.githly", "Githly");
         cx.on_window_closed(|cx, _| {

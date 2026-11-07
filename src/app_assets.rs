@@ -1,7 +1,22 @@
-use gpui_kit::{AssetSource, SharedString, assets};
-use std::borrow::Cow;
+use gpui_kit::{
+    AssetSource, Image, ImageFormat, IntoElement, Pixels, SharedString, Styled, assets, img,
+};
+use std::{
+    borrow::Cow,
+    sync::{Arc, LazyLock},
+};
 
-assets::icon_assets!(ExtraIcons, [CloudDownload, Archive]);
+pub(crate) fn logo(size: Pixels) -> impl IntoElement {
+    static LOGO: LazyLock<Arc<Image>> = LazyLock::new(|| {
+        Arc::new(Image::from_bytes(
+            ImageFormat::Png,
+            include_bytes!("../assets/branding/githly-256.png").to_vec(),
+        ))
+    });
+    img(LOGO.clone()).size(size).flex_shrink_0()
+}
+
+assets::icon_assets!(ExtraIcons, [CloudDownload, Archive, ListX]);
 
 pub(crate) struct AppAssets;
 
@@ -28,11 +43,12 @@ mod tests {
     use assets::IconName;
 
     #[test]
-    fn application_source_loads_update_stash_and_default_icons() {
+    fn application_source_loads_extra_and_default_icons() {
         let paths = AppAssets.list("icons").unwrap();
         for icon in [
             IconName::CloudDownload,
             IconName::Archive,
+            IconName::ListX,
             IconName::Settings,
         ] {
             let path = icon.path();

@@ -1,5 +1,6 @@
 use std::{fmt, ops::Range};
 
+use bstr::ByteSlice;
 use gpui::SharedString;
 
 use super::document::{DiffFile, DiffFileStatus, FileSide, Hunk, LinePair};
@@ -697,6 +698,6 @@ fn decode_path(value: &str, number: usize) -> Result<String> {
             _ => return Err(DiffParseError::new(number, "unsupported path escape")),
         }
     }
-    String::from_utf8(output)
-        .map_err(|_| DiffParseError::new(number, "file path is not valid UTF-8"))
+    // Git quotes arbitrary path bytes. Only the presentation label needs UTF-8.
+    Ok(String::from_utf8(output).unwrap_or_else(|err| err.as_bytes().escape_bytes().to_string()))
 }

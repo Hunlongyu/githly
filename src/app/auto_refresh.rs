@@ -171,9 +171,14 @@ impl GitPanel {
                             retired
                         }
                         Err(error) => {
-                            let message = format!("{error:#}");
-                            if this.refresh_error.as_ref() != Some(&message) {
-                                this.refresh_error = Some(message);
+                            if this
+                                .refresh_error
+                                .as_ref()
+                                .map(ToString::to_string)
+                                .as_deref()
+                                != Some(&format!("{error:#}"))
+                            {
+                                this.refresh_error = Some(LocalizedText::diagnostic(error));
                                 cx.notify();
                             }
                             None

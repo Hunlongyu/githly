@@ -55,7 +55,7 @@
 
 各平台均需安装 Git。如果环境变量中找不到 Git，可在设置中选择可执行文件。
 
-Githly 默认按系统语言偏好顺序选择简体中文或英文，均不匹配时使用英文。在 **设置 → 语言** 中可手动切换，重启 Githly 后生效。
+Githly 默认按系统语言偏好顺序选择简体中文或英文，均不匹配时使用英文。在 **设置 → 通用 → 语言** 中可即时切换。
 
 前往 **[GitHub Releases 最新正式版](https://github.com/Hunlongyu/githly/releases/latest)** 选择安装包或便携 ZIP。每个正式版本均附带更新说明和 `SHA256SUMS.txt` 校验文件。
 

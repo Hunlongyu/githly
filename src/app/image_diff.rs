@@ -1,6 +1,7 @@
 use crate::git::{ChangedFile, Git};
-use crate::i18n::messages;
+use crate::i18n::{Locale, LocalizedText, messages};
 use anyhow::{Context as _, Result};
+use bstr::ByteSlice;
 use gpui_kit::{
     AnyElement, App, Bounds, InteractiveElement, IntoElement, ObjectFit, ParentElement,
     RenderImage, Styled, TestSupportExt, Window, canvas,
@@ -32,7 +33,7 @@ pub(super) struct ImageDiff {
 pub(super) enum ImageSide {
     Ready(ImagePreview),
     Missing,
-    Error(String),
+    Error(LocalizedText),
 }
 
 pub(super) struct ImagePreview {
@@ -43,9 +44,11 @@ pub(super) struct ImagePreview {
     first_frame: bool,
 }
 
-pub(super) fn is_image(path: &str) -> bool {
-    Path::new(path)
-        .extension()
+pub(super) fn is_image(path: impl AsRef<[u8]>) -> bool {
+    path.as_ref()
+        .to_path()
+        .ok()
+        .and_then(Path::extension)
         .and_then(|ext| ext.to_str())
         .is_some_and(|ext| {
             matches!(
@@ -80,17 +83,21 @@ pub(super) async fn load(
 }
 
 impl ImageSide {
-    pub(super) fn from_bytes(bytes: Result<Option<Vec<u8>>>, path: &str) -> Self {
+    pub(super) fn from_bytes(bytes: Result<Option<Vec<u8>>>, path: impl AsRef<[u8]>) -> Self {
         match bytes.and_then(|bytes| bytes.map(|bytes| decode(&bytes, path)).transpose()) {
             Ok(Some(preview)) => Self::Ready(preview),
             Ok(None) => Self::Missing,
-            Err(error) => Self::Error(messages().image_preview_failed(error)),
+            Err(error) => Self::Error(LocalizedText::with_error(error, |l, e| {
+                l.image_preview_failed(e)
+            })),
         }
     }
 }
 
-fn decode(bytes: &[u8], path: &str) -> Result<ImagePreview> {
-    let svg = Path::new(path)
+fn decode(bytes: &[u8], path: impl AsRef<[u8]>) -> Result<ImagePreview> {
+    let svg = path
+        .as_ref()
+        .to_path()?
         .extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case("svg"));
     let (mut pixels, width, height, first_frame) = if svg {
@@ -107,7 +114,9 @@ fn decode(bytes: &[u8], path: &str) -> Result<ImagePreview> {
         limits.max_image_width = Some(16384);
         limits.max_image_height = Some(16384);
         reader.limits(limits);
-        let decoded = reader.decode().context(messages().invalid_image())?;
+        let decoded = reader
+            .decode()
+            .with_context(|| LocalizedText::new(Locale::invalid_image))?;
         let (width, height) = decoded.dimensions();
         let preview = if width > PREVIEW_EDGE || height > PREVIEW_EDGE {
             decoded.thumbnail(PREVIEW_EDGE, PREVIEW_EDGE)
@@ -144,12 +153,14 @@ fn decode_svg(bytes: &[u8]) -> Result<(RgbaImage, u32, u32)> {
             })
             .clone();
     }
-    let tree = usvg::Tree::from_data(bytes, &options).context(messages().parse_svg())?;
+    let tree = usvg::Tree::from_data(bytes, &options)
+        .with_context(|| LocalizedText::new(Locale::parse_svg))?;
     let original = tree.size().to_int_size();
     let scale = (PREVIEW_EDGE as f32 / tree.size().width().max(tree.size().height())).min(1.);
     let width = (tree.size().width() * scale).round().max(1.) as u32;
     let height = (tree.size().height() * scale).round().max(1.) as u32;
-    let mut pixmap = tiny_skia::Pixmap::new(width, height).context(messages().svg_size())?;
+    let mut pixmap = tiny_skia::Pixmap::new(width, height)
+        .with_context(|| LocalizedText::new(Locale::svg_size))?;
     resvg::render(
         &tree,
         tiny_skia::Transform::from_scale(scale, scale),
@@ -165,7 +176,8 @@ fn decode_svg(bytes: &[u8]) -> Result<(RgbaImage, u32, u32)> {
         })
         .collect();
     Ok((
-        RgbaImage::from_raw(width, height, rgba).context(messages().svg_pixels())?,
+        RgbaImage::from_raw(width, height, rgba)
+            .with_context(|| LocalizedText::new(Locale::svg_pixels))?,
         original.width(),
         original.height(),
     ))
@@ -241,7 +253,7 @@ impl ImageSide {
                     .into_any_element()
             }
             Self::Missing => empty_side(messages().missing_image().into(), cx),
-            Self::Error(message) => empty_side(message.clone(), cx),
+            Self::Error(message) => empty_side(message.to_string(), cx),
         };
         v_flex()
             .id(id)

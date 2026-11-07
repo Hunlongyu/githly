@@ -269,6 +269,9 @@ path = "tests/integration/main.rs"
 [dependencies.anyhow]
 version = "1"
 
+[dependencies.bstr]
+version = "1"
+
 [dependencies.chrono]
 version = "0.4.38"
 

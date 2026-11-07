@@ -1,5 +1,5 @@
 use super::{Fetch, Response};
-use crate::i18n::messages;
+use crate::i18n::{Locale, LocalizedText};
 use anyhow::{Context, Result, ensure};
 use std::{
     ffi::c_void,
@@ -14,10 +14,10 @@ pub struct Http;
 struct Handle(*mut c_void);
 impl Handle {
     fn new(value: *mut c_void) -> Result<Self> {
-        ensure!(
-            !value.is_null(),
-            messages().connection_failed(std::io::Error::last_os_error())
-        );
+        ensure!(!value.is_null(), {
+            let error = std::io::Error::last_os_error();
+            LocalizedText::new(|l| l.connection_failed(&error))
+        });
         Ok(Self(value))
     }
 }
@@ -33,10 +33,10 @@ fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(Some(0)).collect()
 }
 fn succeeded(value: i32) -> Result<()> {
-    ensure!(
-        value != 0,
-        messages().request_failed(std::io::Error::last_os_error())
-    );
+    ensure!(value != 0, {
+        let error = std::io::Error::last_os_error();
+        LocalizedText::new(|l| l.request_failed(&error))
+    });
     Ok(())
 }
 fn header(handle: &Handle, name: &str) -> Option<u64> {
@@ -65,13 +65,16 @@ fn header(handle: &Handle, name: &str) -> Option<u64> {
 }
 
 impl Fetch for Http {
-    fn get(&mut self, address: &str, output: &mut dyn Write, limit: u64) -> Result<Response> {
+    fn get(&self, address: &str, output: &mut dyn Write, limit: u64) -> Result<Response> {
         let url = url::Url::parse(address)?;
         ensure!(
             url.scheme() == "https" && url.username().is_empty() && url.password().is_none(),
-            messages().https_required()
+            LocalizedText::new(Locale::https_required)
         );
-        let host = wide(url.host_str().context(messages().missing_host())?);
+        let host = wide(
+            url.host_str()
+                .with_context(|| LocalizedText::new(Locale::missing_host))?,
+        );
         let path = wide(&format!(
             "{}{}",
             url.path(),
@@ -149,13 +152,19 @@ impl Fetch for Http {
                 return Ok(response);
             }
             if let Some(length) = header(&request, "Content-Length") {
-                ensure!(length <= limit, messages().update_size_limit());
+                ensure!(
+                    length <= limit,
+                    LocalizedText::new(Locale::update_size_limit)
+                );
             }
             let mut buffer = [0u8; 64 * 1024];
             let mut total = 0u64;
             let budget = Duration::from_secs(if limit <= 1024 * 1024 { 45 } else { 600 });
             loop {
-                ensure!(start.elapsed() < budget, messages().request_timeout());
+                ensure!(
+                    start.elapsed() < budget,
+                    LocalizedText::new(Locale::request_timeout)
+                );
                 let mut read = 0;
                 succeeded(WinHttpReadData(
                     request.0,
@@ -167,7 +176,10 @@ impl Fetch for Http {
                     break;
                 }
                 total += u64::from(read);
-                ensure!(total <= limit, messages().update_size_limit());
+                ensure!(
+                    total <= limit,
+                    LocalizedText::new(Locale::update_size_limit)
+                );
                 output.write_all(&buffer[..read as usize])?;
             }
             Ok(response)

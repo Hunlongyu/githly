@@ -1,79 +1,76 @@
 use super::*;
-use std::{fmt::Write, io::Read};
 
-// Use Git's C-style quoted-path syntax. Spaces and UTF-8 are literal inside
-// quotes, and three-digit octal escapes are unambiguous for control bytes.
-fn quoted_path(prefix: char, name: &str) -> String {
-    let mut path = format!("\"{prefix}/");
-    for ch in name.chars() {
-        match ch {
-            '"' | '\\' => {
-                path.push('\\');
-                path.push(ch);
-            }
-            ch if ch.is_ascii_control() => write!(path, "\\{:03o}", ch as u32).unwrap(),
-            ch => path.push(ch),
-        }
-    }
-    path.push('"');
-    path
-}
-
-pub(super) fn patch(root: &Path, name: &str) -> Result<String> {
-    const FILE_LIMIT: u64 = 1024 * 1024;
+pub(super) async fn patch(git: &Git, root: &Path, name: &Path) -> Result<String> {
     let path = root.join(name);
-    let metadata = std::fs::symlink_metadata(&path)?;
-    let (mode, text) = if metadata.is_symlink() {
-        let target = std::fs::read_link(&path)?;
-        (
-            "120000",
-            target.to_str().context(messages().non_text())?.to_owned(),
-        )
+    let metadata = blocking::unblock(move || std::fs::symlink_metadata(path)).await?;
+    anyhow::ensure!(
+        metadata.is_file() || metadata.is_symlink(),
+        LocalizedText::new(Locale::non_text)
+    );
+    anyhow::ensure!(
+        metadata.len() <= 1024 * 1024,
+        LocalizedText::new(Locale::file_too_large)
+    );
+
+    // Outside repository context, Git compares raw worktree bytes without applying
+    // repository clean filters. Quote non-UTF-8 path bytes in the textual header.
+    let args = [
+        "--git-dir=/dev/null",
+        "-c",
+        "core.autocrlf=false",
+        "-c",
+        "core.quotePath=true",
+        "-c",
+        "core.attributesFile=/dev/null",
+        "diff",
+        "--no-index",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-color",
+        "--text",
+        "--src-prefix=a/",
+        "--dst-prefix=b/",
+        "--",
+        "/dev/null",
+    ];
+    // Even after --, no-index treats a literal "-" operand as standard input.
+    let operand = if name == Path::new("-") {
+        Path::new("./-")
     } else {
-        anyhow::ensure!(metadata.is_file(), messages().non_text());
-        anyhow::ensure!(metadata.len() <= FILE_LIMIT, messages().file_too_large());
-        let mut bytes = Vec::with_capacity(metadata.len() as usize);
-        std::fs::File::open(path)?
-            .take(FILE_LIMIT + 1)
-            .read_to_end(&mut bytes)?;
-        anyhow::ensure!(
-            bytes.len() as u64 <= FILE_LIMIT,
-            messages().file_too_large()
-        );
-        anyhow::ensure!(!bytes.contains(&0), messages().non_text());
-        #[cfg(unix)]
-        let executable = {
-            use std::os::unix::fs::PermissionsExt;
-            metadata.permissions().mode() & 0o100 != 0
-        };
-        #[cfg(not(unix))]
-        let executable = false;
-        (
-            if executable { "100755" } else { "100644" },
-            String::from_utf8(bytes).context(messages().non_text())?,
-        )
+        name
     };
-    let old = quoted_path('a', name);
-    let new = quoted_path('b', name);
-    let mut output = format!("diff --git {old} {new}\nnew file mode {mode}\n");
-    if !text.is_empty() {
-        let count = text.split_inclusive('\n').count();
-        writeln!(output, "--- /dev/null\n+++ {new}\n@@ -0,0 +1,{count} @@")?;
-        let ending = if text.ends_with('\n') {
-            ""
-        } else {
-            "\n\\ No newline at end of file\n"
-        };
-        let length = output.len() + text.len() + count + ending.len();
-        anyhow::ensure!(length <= DIFF_LIMIT, messages().diff_too_large());
-        output.reserve(length - output.len());
-        for line in text.split_inclusive('\n') {
-            output.push('+');
-            output.push_str(line);
-        }
-        output.push_str(ending);
+    let bytes = git
+        .run_with_stdout(
+            Some(root),
+            args.map(OsStr::new)
+                .into_iter()
+                .chain([operand.as_os_str()]),
+            |status, bytes: &Vec<u8>| status.code() == Some(1) && bytes.starts_with(b"diff --git "),
+            |stdout| async move {
+                let mut bytes = Vec::new();
+                stdout
+                    .take(DIFF_LIMIT as u64 + 1)
+                    .read_to_end(&mut bytes)
+                    .await?;
+                anyhow::ensure!(
+                    bytes.len() <= DIFF_LIMIT,
+                    LocalizedText::new(Locale::diff_too_large)
+                );
+                Ok(bytes)
+            },
+        )
+        .await?;
+    anyhow::ensure!(!bytes.contains(&0), LocalizedText::new(Locale::non_text));
+    let mut patch =
+        String::from_utf8(bytes).with_context(|| LocalizedText::new(Locale::non_text))?;
+    if name == Path::new("-") {
+        // Git also copies the stdin-disambiguating "./" into its headers.
+        // git apply rejects that path component. Leave all hunk bytes untouched.
+        patch = patch
+            .replacen("diff --git a/./- b/./-\n", "diff --git a/- b/-\n", 1)
+            .replacen("\n+++ b/./-\n", "\n+++ b/-\n", 1);
     }
-    Ok(output)
+    Ok(patch)
 }
 
 #[cfg(test)]
@@ -91,7 +88,8 @@ mod tests {
             let name = "未跟踪 a b.txt";
             let path = root.join(name);
             std::fs::write(&path, text).unwrap();
-            let output = patch(root, name).unwrap();
+            let output =
+                futures_lite::future::block_on(patch(&git, root, Path::new(name))).unwrap();
             let files = DiffFile::parse(&output).unwrap();
             assert_eq!(files.len(), 1);
             assert_eq!(files[0].path().as_ref(), name);
@@ -103,24 +101,64 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
-    fn paths_with_control_characters_and_quotes_round_trip_through_the_viewer() {
+    fn control_characters_and_quotes_round_trip_through_git_and_the_viewer() {
+        let (repo, git) = super::super::history_tests::fixture(0);
         let name = "quote\"\\\r\n\t name";
-        let old = quoted_path('a', name);
-        let new = quoted_path('b', name);
-        let output = format!(
-            "diff --git {old} {new}\nnew file mode 100644\n--- /dev/null\n+++ {new}\n@@ -0,0 +1 @@\n+x\n"
-        );
+        std::fs::write(repo.path().join(name), b"x\n").unwrap();
+        let output =
+            futures_lite::future::block_on(patch(&git, repo.path(), Path::new(name))).unwrap();
         assert_eq!(DiffFile::parse(&output).unwrap()[0].path().as_ref(), name);
     }
 
     #[test]
     fn expanded_patch_obeys_the_diff_limit() {
-        let root = tempfile::tempdir().unwrap();
+        let (root, git) = super::super::history_tests::fixture(0);
         std::fs::write(root.path().join("lines"), vec![b'\n'; 1024 * 1024]).unwrap();
         assert_eq!(
-            patch(root.path(), "lines").unwrap_err().to_string(),
+            futures_lite::future::block_on(patch(&git, root.path(), Path::new("lines")))
+                .unwrap_err()
+                .to_string(),
             messages().diff_too_large()
         );
+    }
+
+    #[test]
+    fn untracked_diff_reads_a_literal_dash_and_preserves_raw_text() {
+        let (repo, git) = super::super::history_tests::fixture(0);
+        let root = repo.path();
+        std::fs::write(root.join(".gitattributes"), "* text eol=lf\n").unwrap();
+        let path = Path::new("-");
+        let read = || futures_lite::future::block_on(patch(&git, root, path));
+        std::fs::write(root.join(path), b"one\r\ntwo\r\n").unwrap();
+        let patch = read().unwrap();
+        assert!(patch.contains("+one\r\n+two\r\n"));
+        assert_eq!(DiffFile::parse(&patch).unwrap()[0].path().as_ref(), "-");
+        std::fs::write(root.join("dash.patch"), patch).unwrap();
+        std::fs::remove_file(root.join(path)).unwrap();
+        super::super::history_tests::command(
+            &git,
+            root,
+            &["apply", "--whitespace=nowarn", "--", "dash.patch"],
+        );
+        assert_eq!(std::fs::read(root.join(path)).unwrap(), b"one\r\ntwo\r\n");
+        for binary in [b"a\0b".as_slice(), b"\xff"] {
+            std::fs::write(root.join(path), binary).unwrap();
+            assert_eq!(read().unwrap_err().to_string(), messages().non_text());
+        }
+        std::fs::write(root.join(path), vec![b'a'; 1024 * 1024 + 1]).unwrap();
+        assert_eq!(read().unwrap_err().to_string(), messages().file_too_large());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn untracked_symlink_shows_its_target_path() {
+        let (repo, git) = super::super::history_tests::fixture(0);
+        std::os::unix::fs::symlink("absent", repo.path().join("link")).unwrap();
+        let patch =
+            futures_lite::future::block_on(patch(&git, repo.path(), Path::new("link"))).unwrap();
+        assert!(patch.contains("new file mode 120000"));
+        assert!(patch.contains("+absent\n"));
     }
 }

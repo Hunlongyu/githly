@@ -7,6 +7,109 @@ pub(crate) const NO_HOOKS: &str = if cfg!(windows) {
     "core.hooksPath=/dev/null"
 };
 
+#[test]
+fn non_utf8_git_paths_stay_distinct_in_history_statistics_and_diff_labels() {
+    let (dir, git) = fixture(0);
+    let root = dir.path();
+    // Import directly into Git: these names can exist in history even on
+    // systems whose filesystem cannot represent them.
+    let input = dir.path().join("import");
+    std::fs::write(&input, b"commit refs/heads/main\ncommitter Test <t@example.org> 1700000000 +0000\ndata 4\ninit\nM 100644 inline \"a\\376\"\ndata 2\n1\nM 100644 inline \"a\\377\"\ndata 4\n2\n3\n\n").unwrap();
+    let output = std::process::Command::new(&git.executable)
+        .current_dir(root)
+        .args(["fast-import", "--quiet"])
+        .stdin(std::fs::File::open(input).unwrap())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    futures_lite::future::block_on(async {
+        let files = git.commit_files(root, "HEAD").await.unwrap();
+        let stats = git
+            .line_statistics(root, Some("HEAD"), ChangeScope::All, &[])
+            .await
+            .unwrap();
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].path.as_slice(), b"a\xfe");
+        assert_eq!(files[1].path.as_slice(), b"a\xff");
+        assert_eq!(stats.files[b"a\xfe".as_slice()], Some((1, 0)));
+        assert_eq!(stats.files[b"a\xff".as_slice()], Some((2, 0)));
+        let patch = git
+            .run(
+                Some(root),
+                ["-c", "core.quotePath=true", "show", "--format=", "HEAD"],
+            )
+            .await
+            .unwrap();
+        let rendered =
+            gpui_kit::component::diff::DiffFile::parse(std::str::from_utf8(&patch).unwrap())
+                .unwrap();
+        for (diff, file) in rendered.iter().zip(&files) {
+            assert_eq!(diff.path().as_str(), file.display_path());
+        }
+        assert_eq!(rendered.len(), files.len());
+        assert_ne!(files[0].display_path(), files[1].display_path());
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn non_utf8_worktree_paths_reach_git_and_filesystem_without_conversion() {
+    let (dir, git) = fixture(0);
+    let root = dir.path();
+    for (name, bytes) in [
+        (b"a\xfe", b"first".as_slice()),
+        (b"a\xff", b"second".as_slice()),
+    ] {
+        let result = std::fs::write(root.join(name.to_path().unwrap()), bytes);
+        // APFS rejects ill-formed UTF-8 filenames. The fast-import test above
+        // still exercises those names in Git objects on every filesystem.
+        #[cfg(target_os = "macos")]
+        if result
+            .as_ref()
+            .is_err_and(|error| matches!(error.raw_os_error(), Some(libc::EILSEQ | libc::EINVAL)))
+        {
+            return;
+        }
+        result.unwrap();
+    }
+    futures_lite::future::block_on(async {
+        let repo = git.open(root, 10).await.unwrap();
+        assert_eq!(repo.changes.len(), 2);
+        for (file, contents) in repo.changes.iter().zip(["first", "second"]) {
+            assert_eq!(
+                git.image_file(root, None, &file.path)
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                contents.as_bytes()
+            );
+            let patch = git.diff(root, None, file).await.unwrap();
+            assert!(patch.contains(&format!("+{contents}\n")));
+        }
+        command(&git, root, &["add", "--all"]);
+        command(&git, root, &["-c", NO_HOOKS, "commit", "-m", "files"]);
+        for (file, contents) in repo.changes.iter().zip(["first", "second"]) {
+            assert!(
+                git.diff(root, Some("HEAD"), file)
+                    .await
+                    .unwrap()
+                    .contains(&format!("+{contents}\n"))
+            );
+            assert_eq!(
+                git.image_file(root, Some(":"), &file.path)
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                contents.as_bytes()
+            );
+        }
+    });
+}
+
 pub(crate) fn command(git: &Git, root: &Path, args: &[&str]) -> Vec<u8> {
     let mut cmd = std::process::Command::new(&git.executable);
     #[cfg(windows)]
@@ -315,7 +418,7 @@ fn branch_browsing_is_read_only_and_checkout_rejects_dirty_worktree() {
             ],
         );
         let body = git.commit_body(root, "HEAD").await.unwrap();
-        assert!(body.contains("第一段\n\n第二段"));
+        assert!(body.to_string().contains("第一段\n\n第二段"));
     });
 }
 
@@ -329,7 +432,7 @@ fn untracked_statistics_bound_metadata_checks_as_well_as_reads() {
             path: if i == 256 {
                 "last.txt".into()
             } else {
-                format!("{i}.txt")
+                format!("{i}.txt").into()
             },
             original_path: None,
             status: "??".into(),
@@ -342,7 +445,7 @@ fn untracked_statistics_bound_metadata_checks_as_well_as_reads() {
         &changes,
     ))
     .unwrap();
-    assert!(stats.incomplete && stats.files["last.txt"].is_none());
+    assert!(stats.incomplete && stats.files["last.txt".as_bytes()].is_none());
 }
 
 #[test]
@@ -363,7 +466,7 @@ fn stash_details_bind_object_and_include_untracked_versions() {
         command(&git, root, &["stash", "push", "-u", "-m", "second stash"]);
         let detail = git.stash_detail(root, &id).await.unwrap();
         assert_eq!(detail.files.len(), 2);
-        assert!(detail.untracked_paths.contains("未跟踪.txt"));
+        assert!(detail.untracked_paths.contains("未跟踪.txt".as_bytes()));
         let tracked = detail
             .files
             .iter()
@@ -471,9 +574,9 @@ fn asynchronous_statistics_distinguish_text_binary_and_untracked() {
             .line_statistics(root, None, ChangeScope::All, &repo.changes)
             .await
             .unwrap();
-        assert_eq!(stats.files["file.txt"], Some((2, 1)));
-        assert_eq!(stats.files["new.txt"], Some((2, 0)));
-        assert_eq!(stats.files["binary.dat"], None);
+        assert_eq!(stats.files["file.txt".as_bytes()], Some((2, 1)));
+        assert_eq!(stats.files["new.txt".as_bytes()], Some((2, 0)));
+        assert_eq!(stats.files["binary.dat".as_bytes()], None);
         assert_eq!((stats.added, stats.removed, stats.incomplete), (4, 1, true));
         command(&git, root, &["add", "file.txt"]);
         let stats = git
@@ -541,9 +644,9 @@ fn linked_worktrees_report_status_and_checkout_respects_occupancy() {
         assert_eq!(entries.len(), 2);
         let worktree = entries
             .iter()
-            .find(|entry| entry.branch == "linked")
+            .find(|entry| entry.branch.to_string() == "linked")
             .unwrap();
-        assert_eq!(worktree.status, messages().worktree_changes(1));
+        assert_eq!(worktree.status_label(), messages().worktree_changes(1));
         assert_eq!(git.open(&worktree.path, 46).await.unwrap().branch, "linked");
         assert!(git.switch_branch(directory.path(), "linked").await.is_err());
         assert_eq!(git.open(directory.path(), 46).await.unwrap().branch, "main");

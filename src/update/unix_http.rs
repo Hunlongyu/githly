@@ -1,5 +1,5 @@
 use super::{Fetch, Response};
-use crate::i18n::messages;
+use crate::i18n::{Locale, LocalizedText};
 use anyhow::{Result, ensure};
 use std::{
     io::{self, Write},
@@ -9,7 +9,7 @@ use std::{
 pub(super) struct Http;
 
 impl Fetch for Http {
-    fn get(&mut self, address: &str, output: &mut dyn Write, limit: u64) -> Result<Response> {
+    fn get(&self, address: &str, output: &mut dyn Write, limit: u64) -> Result<Response> {
         let config = ureq::Agent::config_builder()
             .https_only(true)
             .http_status_as_error(false)
@@ -49,7 +49,7 @@ impl Fetch for Http {
         if response.status == 200 {
             ensure!(
                 number("content-length").is_none_or(|length| length <= limit),
-                messages().update_size_limit()
+                LocalizedText::new(Locale::update_size_limit)
             );
             io::copy(
                 &mut reply.body_mut().with_config().limit(limit).reader(),

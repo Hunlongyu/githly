@@ -131,11 +131,29 @@ impl GitPanel {
             .border_l_1()
             .border_color(cx.theme().border)
             .child(
-                div()
-                    .mb_2()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(messages().recent_projects()),
+                h_flex()
+                    .w_full()
+                    .h(px(controls::CONTROL_HEIGHT))
+                    .flex_shrink_0()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(messages().recent_projects()),
+                    )
+                    .when(!self.config.recent_projects.is_empty(), |header| {
+                        header.child(
+                            controls::icon_button(
+                                "clear-recent",
+                                Icon::new(gpui_kit::assets::IconName::ListX)
+                                    .text_color(cx.theme().muted_foreground),
+                            )
+                            .accessibility_label(messages().clear_recent())
+                            .tooltip(messages().clear_recent())
+                            .on_click(cx.listener(|this, _, _, cx| this.clear_recent(cx))),
+                        )
+                    }),
             );
         for (index, path) in self.config.recent_projects.iter().enumerate() {
             let target = path.clone();
@@ -173,13 +191,6 @@ impl GitPanel {
                     .text_color(cx.theme().muted_foreground)
                     .child(messages().no_recent()),
             );
-        } else {
-            recent = recent.child(
-                controls::button("clear-recent")
-                    .ghost()
-                    .label(messages().clear_recent())
-                    .on_click(cx.listener(|this, _, _, cx| this.clear_recent(cx))),
-            );
         }
         h_flex()
             .flex_1()
@@ -192,13 +203,7 @@ impl GitPanel {
                     .w(px(450.))
                     .items_center()
                     .gap(px(16.))
-                    .child(
-                        div()
-                            .p_4()
-                            .rounded_xl()
-                            .bg(cx.theme().muted)
-                            .child(Icon::new(IconName::Network).size_8()),
-                    )
+                    .child(crate::app_assets::logo(px(64.)))
                     .child(div().text_2xl().font_semibold().child("Githly"))
                     .child(
                         div()
@@ -211,9 +216,10 @@ impl GitPanel {
                     })
                     .when(self.git.is_none() && !self.detecting, |view| {
                         view.child(
-                            self.git_error
-                                .clone()
-                                .unwrap_or_else(|| messages().no_git().into()),
+                            self.git_error.as_ref().map_or_else(
+                                || messages().no_git().to_owned(),
+                                ToString::to_string,
+                            ),
                         )
                         .child(self.git_controls(cx))
                     })
@@ -266,10 +272,8 @@ impl GitPanel {
         working: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let (directory, name) = file
-            .path
-            .rsplit_once('/')
-            .unwrap_or(("", file.path.as_str()));
+        let label = file.display_path();
+        let (directory, name) = label.rsplit_once('/').unwrap_or(("", label.as_ref()));
         let selected = self.detail_open
             && self
                 .selected_file
@@ -279,8 +283,8 @@ impl GitPanel {
         let full_path = self
             .repository
             .as_ref()
-            .map(|repo| repo.root.join(&file.path).display().to_string())
-            .unwrap_or_else(|| file.path.clone());
+            .map(|repo| repo.root.join(label.as_ref()).display().to_string())
+            .unwrap_or_else(|| label.to_string());
         h_flex()
             .id((
                 if working {
@@ -432,6 +436,10 @@ impl GitPanel {
                         }
                     })
                     .map(|reference| {
+                        let label = match reference.strip_prefix("tag: ") {
+                            Some(name) => messages().tag_label(name),
+                            None => reference.trim_start_matches("HEAD -> ").to_owned(),
+                        };
                         div()
                             .px_1()
                             .rounded_sm()
@@ -439,7 +447,7 @@ impl GitPanel {
                             .text_color(cx.theme().muted_foreground)
                             .text_size(px(10.))
                             .truncate()
-                            .child(reference.trim_start_matches("HEAD -> ").to_string())
+                            .child(label)
                     }),
             )
             .when(display.hash, |row| {
@@ -585,7 +593,13 @@ impl GitPanel {
                         .py_2()
                         .text_xs()
                         .text_color(cx.theme().warning)
-                        .child(repo.operation_states.join(" · ")),
+                        .child(
+                            repo.operation_states
+                                .iter()
+                                .map(|state| state.get(messages()))
+                                .collect::<Vec<_>>()
+                                .join(" · "),
+                        ),
                 )
             })
             .child(
@@ -609,7 +623,7 @@ impl GitPanel {
                             .child(
                                 Tab::new()
                                     .flex_1()
-                                    .label(format!("Stash  {}", repo.stashes.len())),
+                                    .label(messages().stash_tab(repo.stashes.len())),
                             )
                             .on_click(cx.listener(|this, index: &usize, _, cx| {
                                 let stash = *index == 1;
@@ -1051,30 +1065,33 @@ impl GitPanel {
                                     .child(messages().detail_file_count(meta, self.files.len())),
                             ),
                     )
-                    .when(selected.is_some() && !self.commit_body.is_empty(), |view| {
-                        view.child(
-                            controls::button("commit-message")
-                                .ghost()
-                                .label(messages().full_message())
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    let body = this.commit_body.clone();
-                                    window.open_dialog(cx, move |dialog, _, _| {
-                                        dialog
-                                            .title(messages().commit_message())
-                                            .w(px(640.))
-                                            .centered()
-                                            .child(
-                                                div()
-                                                    .id("commit-body")
-                                                    .max_h(px(420.))
-                                                    .overflow_y_scroll()
-                                                    .text_sm()
-                                                    .child(body.clone()),
-                                            )
-                                    });
-                                })),
-                        )
-                    })
+                    .when(
+                        selected.is_some() && !self.commit_body.get(messages()).is_empty(),
+                        |view| {
+                            view.child(
+                                controls::button("commit-message")
+                                    .ghost()
+                                    .label(messages().full_message())
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        let body = this.commit_body.clone();
+                                        window.open_dialog(cx, move |dialog, _, _| {
+                                            dialog
+                                                .title(messages().commit_message())
+                                                .w(px(640.))
+                                                .centered()
+                                                .child(
+                                                    div()
+                                                        .id("commit-body")
+                                                        .max_h(px(420.))
+                                                        .overflow_y_scroll()
+                                                        .text_sm()
+                                                        .child(body.to_string()),
+                                                )
+                                        });
+                                    })),
+                            )
+                        },
+                    )
                     .child(
                         controls::icon_button("close-detail", IconName::Close)
                             .tooltip(messages().close_details())
@@ -1130,12 +1147,12 @@ impl GitPanel {
                                         div().flex_1().min_w_0().truncate().child(
                                             self.selected_file
                                                 .and_then(|i| self.files.get(i))
-                                                .map(|f| f.path.clone())
+                                                .map(|f| f.display_path().into_owned())
                                                 .unwrap_or_default(),
                                         ),
                                     )
                                     .when(
-                                        self.image_diff.is_none() && self.diff_message.is_empty(),
+                                        self.image_diff.is_none() && self.diff_message.is_none(),
                                         |view| {
                                             view.child(
                                                 controls::icon_button(
@@ -1163,16 +1180,16 @@ impl GitPanel {
                                         },
                                     ),
                             )
-                            .when(!self.diff_message.is_empty(), |view| {
+                            .when_some(self.diff_message.as_ref(), |view, message| {
                                 view.child(
                                     div()
                                         .p_4()
                                         .text_sm()
                                         .text_color(cx.theme().muted_foreground)
-                                        .child(self.diff_message.clone()),
+                                        .child(message.to_string()),
                                 )
                             })
-                            .when(self.diff_message.is_empty(), |view| {
+                            .when(self.diff_message.is_none(), |view| {
                                 if let Some(images) = &self.image_diff {
                                     view.child(images.view(cx))
                                 } else {

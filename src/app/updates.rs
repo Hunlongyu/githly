@@ -10,7 +10,7 @@ pub(super) struct UpdateState {
     task: Option<Task<()>>,
     progress: Option<(u64, u64)>,
     busy: bool,
-    message: String,
+    message: Option<LocalizedText>,
     available: Option<update::Available>,
     installer: Option<PathBuf>,
 }
@@ -22,20 +22,37 @@ impl UpdateState {
 
     fn finish_install(&mut self, result: anyhow::Result<update::InstallOutcome>, cx: &mut App) {
         self.busy = false;
-        self.message = match result {
+        self.message = Some(match result {
             Ok(update::InstallOutcome::Restart(path)) => {
                 cx.set_restart_path(path);
                 cx.restart();
-                messages().restarting().into()
+                LocalizedText::new(Locale::restarting)
             }
             #[cfg(windows)]
-            Ok(update::InstallOutcome::InstallerStarted) => messages().installer_opened().into(),
-            Err(error) => messages().install_failed(error),
-        };
+            Ok(update::InstallOutcome::InstallerStarted) => {
+                LocalizedText::new(Locale::installer_opened)
+            }
+            Err(error) => LocalizedText::with_error(error, |l, e| l.install_failed(e)),
+        });
     }
 }
 
 struct UpdateActions(WeakEntity<GitPanel>);
+
+// Published release notes put the English translation after its own heading.
+// A release with a single language is shown verbatim in both locales.
+fn release_note_sections(notes: &str) -> (SharedString, SharedString) {
+    let notes = notes.replace("\r\n", "\n");
+    let notes = notes.split("\n## 下载").next().unwrap_or_default().trim();
+    if let Some((zh, en)) = notes.split_once("\n**English**\n")
+        && !zh.trim().is_empty()
+        && !en.trim().is_empty()
+    {
+        return (zh.trim().to_owned().into(), en.trim().to_owned().into());
+    }
+    let body: SharedString = notes.to_owned().into();
+    (body.clone(), body)
+}
 
 impl Render for UpdateActions {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -84,7 +101,7 @@ impl GitPanel {
             return;
         };
         self.updates.busy = true;
-        self.updates.message = messages().downloading().into();
+        self.updates.message = Some(LocalizedText::new(Locale::downloading));
         let total = available.manifest.installer.size;
         let received = Arc::new(AtomicU64::new(0));
         let counter = received.clone();
@@ -120,9 +137,13 @@ impl GitPanel {
                 match result {
                     Ok(path) => {
                         this.updates.installer = Some(path);
-                        this.updates.message = messages().download_verified().into();
+                        this.updates.message = Some(LocalizedText::new(Locale::download_verified));
                     }
-                    Err(error) => this.updates.message = messages().download_failed(error),
+                    Err(error) => {
+                        this.updates.message = Some(LocalizedText::with_error(error, |l, e| {
+                            l.download_failed(e)
+                        }))
+                    }
                 }
                 cx.notify();
             });
@@ -142,7 +163,7 @@ impl GitPanel {
             return;
         };
         self.updates.busy = true;
-        self.updates.message = messages().opening_installer().into();
+        self.updates.message = Some(LocalizedText::new(Locale::opening_installer));
         let task = cx.background_spawn(async move { update::install(&path, &available) });
         self.updates.task = Some(cx.spawn(async move |this, cx| {
             let result = task.await;
@@ -158,31 +179,20 @@ impl GitPanel {
         let Some(available) = &self.updates.available else {
             return;
         };
-        let title = format!(
-            "{} · v{}",
-            messages().release_notes(),
-            available.manifest.version
-        );
-        let notes = available
-            .manifest
-            .notes
-            .split("\n## 下载")
-            .next()
-            .unwrap_or_default()
-            .trim();
-        let body: SharedString = if notes.is_empty() {
-            messages().notes_unavailable().into()
-        } else {
-            notes.to_owned().into()
-        };
+        let version = available.manifest.version.clone();
+        let (zh, en) = release_note_sections(&available.manifest.notes);
         let parent = cx.entity();
         let actions = cx.new(|cx| {
             cx.observe(&parent, |_, _, cx| cx.notify()).detach();
             UpdateActions(parent.downgrade())
         });
         window.open_dialog(cx, move |dialog, _, _| {
+            let notes = match messages() {
+                Locale::Chinese => &zh,
+                Locale::English => &en,
+            };
             dialog
-                .title(title.clone())
+                .title(format!("{} · v{version}", messages().release_notes()))
                 .w(px(620.))
                 .centered()
                 .child(
@@ -191,7 +201,14 @@ impl GitPanel {
                         .test_support()
                         .max_h(px(360.))
                         .overflow_y_scroll()
-                        .child(TextView::markdown("release-markdown", body.clone())),
+                        .child(TextView::markdown(
+                            "release-markdown",
+                            if notes.is_empty() {
+                                messages().notes_unavailable().into()
+                            } else {
+                                notes.clone()
+                            },
+                        )),
                 )
                 .footer(actions.clone())
         });
@@ -214,8 +231,8 @@ impl GitPanel {
                     total as f64 / 1048576.
                 )))
             })
-            .when(!self.updates.message.is_empty(), |view| {
-                view.child(div().text_size(px(12.)).child(self.updates.message.clone()))
+            .when_some(self.updates.message.as_ref(), |view, message| {
+                view.child(div().text_size(px(12.)).child(message.to_string()))
             })
             .when(self.updates.update_available(), |view| {
                 view.child(
@@ -247,6 +264,18 @@ mod tests {
     use crate::update::{Available, Distribution, Installer, Manifest};
     use gpui_kit::component::WindowExt;
     use gpui_kit::{AppContext, TestAppContext, WindowOptions, test::TestWindowExt};
+
+    #[test]
+    fn release_notes_select_the_translation_and_preserve_single_language_notes() {
+        let (zh, en) = super::release_note_sections(
+            "- 修复搜索\r\n\r\n**English**\r\n\r\n- Fix search\r\n\r\n## 下载\r\n链接",
+        );
+        assert_eq!(zh.as_ref(), "- 修复搜索");
+        assert_eq!(en.as_ref(), "- Fix search");
+        let (zh, en) = super::release_note_sections("- Fix search");
+        assert_eq!(zh.as_ref(), "- Fix search");
+        assert_eq!(en, zh);
+    }
 
     #[gpui_kit::test]
     async fn only_a_completed_install_restarts_the_selected_copy(cx: &mut TestAppContext) {

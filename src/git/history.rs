@@ -1,5 +1,4 @@
 use super::*;
-use crate::i18n::messages;
 use futures_lite::io::{AsyncBufRead, BufReader};
 use std::{
     ops::Index,
@@ -67,7 +66,7 @@ impl HistoryStream {
     pub fn start(git: &Git, repository: &Repository) -> Result<Self> {
         anyhow::ensure!(
             !repository.history_roots.is_empty(),
-            messages().no_more_history()
+            LocalizedText::new(Locale::no_more_history)
         );
         let mut command = std::process::Command::new(&git.executable);
         #[cfg(windows)]
@@ -102,14 +101,19 @@ impl HistoryStream {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .spawn()?;
-        let stdout = BufReader::new(child.stdout.take().context(messages().read_history())?);
+        let stdout = BufReader::new(
+            child
+                .stdout
+                .take()
+                .with_context(|| LocalizedText::new(Locale::read_history))?,
+        );
         Ok(Self { child, stdout })
     }
 
     pub async fn extend(&mut self, previous: &Repository) -> Result<Repository> {
         futures_lite::future::race(self.read_batch(previous), async {
             async_io::Timer::after(Duration::from_secs(20)).await;
-            bail!(messages().history_timeout())
+            bail!(LocalizedText::new(Locale::history_timeout))
         })
         .await
     }
@@ -134,7 +138,9 @@ impl HistoryStream {
                         .position(|b| *b == 0)
                         .map_or(buffer.len(), |i| i + 1);
                     if bytes.len() + count > 8 * 1024 * 1024 {
-                        return Poll::Ready(Err(anyhow::anyhow!(messages().history_limit())));
+                        return Poll::Ready(Err(anyhow::anyhow!(LocalizedText::new(
+                            Locale::history_limit
+                        ))));
                     }
                     let terminated = buffer[count - 1] == 0;
                     bytes.extend_from_slice(&buffer[..count]);
@@ -150,8 +156,14 @@ impl HistoryStream {
             }
             if !terminated {
                 let status = self.child.status().await?;
-                anyhow::ensure!(status.success(), messages().history_failed(status));
-                anyhow::ensure!(field % 7 == 0, messages().incomplete_history());
+                anyhow::ensure!(
+                    status.success(),
+                    LocalizedText::new(|l| l.history_failed(status))
+                );
+                anyhow::ensure!(
+                    field % 7 == 0,
+                    LocalizedText::new(Locale::incomplete_history)
+                );
                 complete = true;
                 break;
             }

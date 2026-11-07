@@ -1,12 +1,23 @@
 use super::*;
-use crate::i18n::messages;
 
 #[derive(Clone)]
 pub struct Worktree {
     pub path: PathBuf,
-    pub branch: String,
-    pub status: String,
+    pub branch: LocalizedText,
+    status: Option<LocalizedText>,
+    locked: bool,
     pub available: bool,
+}
+
+impl Worktree {
+    pub fn status_label(&self) -> String {
+        match (&self.status, self.locked) {
+            (Some(status), true) => format!("{} · {status}", messages().locked()),
+            (Some(status), false) => status.to_string(),
+            (None, true) => messages().locked().into(),
+            (None, false) => messages().status_unchecked().into(),
+        }
+    }
 }
 
 impl Git {
@@ -16,28 +27,30 @@ impl Git {
             .await?;
         let mut entries = Vec::<Worktree>::new();
         for field in output.split(|b| *b == 0) {
-            let text = String::from_utf8_lossy(field);
-            if let Some(path) = text.strip_prefix("worktree ") {
+            if let Some(path) = field.strip_prefix(b"worktree ") {
+                let path = path.to_path()?;
                 entries.push(Worktree {
                     path: PathBuf::from(path),
-                    branch: messages().detached_head().into(),
-                    status: messages().status_unchecked().into(),
-                    available: Path::new(path).is_dir(),
+                    branch: LocalizedText::new(Locale::detached_head),
+                    status: None,
+                    locked: false,
+                    available: path.is_dir(),
                 });
             } else if let Some(entry) = entries.last_mut() {
+                let text = String::from_utf8_lossy(field);
                 if let Some(branch) = text.strip_prefix("branch refs/heads/") {
-                    entry.branch = branch.into();
+                    entry.branch = LocalizedText::Verbatim(branch.into());
                 }
                 if text == "bare" {
                     entry.available = false;
-                    entry.branch = messages().bare_repository().into();
+                    entry.branch = LocalizedText::new(Locale::bare_repository);
                 }
                 if text.starts_with("locked") {
-                    entry.status = messages().locked().into();
+                    entry.locked = true;
                 }
                 if text.starts_with("prunable") {
                     entry.available = false;
-                    entry.status = messages().directory_missing().into();
+                    entry.status = Some(LocalizedText::new(Locale::directory_missing));
                 }
             }
         }
@@ -51,27 +64,25 @@ impl Git {
         let available = entries.iter_mut().filter(|entry| entry.available).take(64);
         stream::iter(available)
             .for_each_concurrent(4, |entry| async move {
-                let note =
-                    (entry.status != messages().status_unchecked()).then(|| entry.status.clone());
-                let status = match self
-                    .run(
-                        Some(&entry.path),
-                        ["status", "--porcelain=v1", "-z", "--untracked-files=normal"],
-                    )
-                    .await
-                {
-                    Ok(output) => {
-                        let count = parse_status(&output).len();
-                        if count == 0 {
-                            messages().clean_worktree().into()
-                        } else {
-                            messages().worktree_changes(count)
+                entry.status = Some(
+                    match self
+                        .run(
+                            Some(&entry.path),
+                            ["status", "--porcelain=v1", "-z", "--untracked-files=normal"],
+                        )
+                        .await
+                    {
+                        Ok(output) => {
+                            let count = parse_status(&output).len();
+                            if count == 0 {
+                                LocalizedText::new(Locale::clean_worktree)
+                            } else {
+                                LocalizedText::new(|l| l.worktree_changes(count))
+                            }
                         }
-                    }
-                    Err(error) => messages().unreadable(error),
-                };
-                entry.status =
-                    note.map_or_else(|| status.clone(), |note| format!("{note} · {status}"));
+                        Err(error) => LocalizedText::with_error(error, |l, e| l.unreadable(e)),
+                    },
+                );
             })
             .await;
         Ok(entries)

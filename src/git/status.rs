@@ -1,5 +1,4 @@
 use super::*;
-use crate::i18n::messages;
 
 pub(super) struct Status {
     pub head: Option<String>,
@@ -22,8 +21,8 @@ pub(super) fn parse(bytes: &[u8], previous: Option<&Repository>) -> Result<Statu
             branch = Some(String::from_utf8_lossy(value).into_owned());
         }
     }
-    let oid = oid.context(messages().missing_head())?;
-    let branch = branch.context(messages().missing_branch())?;
+    let oid = oid.with_context(|| LocalizedText::new(Locale::missing_head))?;
+    let branch = branch.with_context(|| LocalizedText::new(Locale::missing_branch))?;
     let tracking = parse_tracking(bytes);
     use sha2::{Digest, Sha256};
     let changes_digest = Sha256::digest(&bytes[header_len.min(bytes.len())..]).into();
@@ -51,7 +50,7 @@ fn parse_changes<'a>(mut records: impl Iterator<Item = &'a [u8]>) -> Result<Vec<
         if let Some(path) = record.strip_prefix(b"? ") {
             changes.push(ChangedFile {
                 status: "??".into(),
-                path: String::from_utf8_lossy(path).into_owned(),
+                path: path.into(),
                 original_path: None,
             });
             continue;
@@ -62,28 +61,28 @@ fn parse_changes<'a>(mut records: impl Iterator<Item = &'a [u8]>) -> Result<Vec<
             b'1' => 9,
             b'2' => 10,
             b'u' => 11,
-            _ => bail!(messages().unknown_status()),
+            _ => bail!(LocalizedText::new(Locale::unknown_status)),
         };
         let mut parts = record.splitn(fields, |b| *b == b' ');
         let xy = parts
             .nth(1)
             .filter(|xy| xy.len() == 2)
-            .context(messages().incomplete_status())?;
+            .with_context(|| LocalizedText::new(Locale::incomplete_status))?;
         let path = parts
             .nth(fields - 3)
-            .context(messages().incomplete_path())?;
+            .with_context(|| LocalizedText::new(Locale::incomplete_path))?;
         let original_path = if record[0] == b'2' {
             let original = records
                 .next()
                 .filter(|p| !p.is_empty())
-                .context(messages().incomplete_rename())?;
-            Some(String::from_utf8_lossy(original).into_owned())
+                .with_context(|| LocalizedText::new(Locale::incomplete_rename))?;
+            Some(original.into())
         } else {
             None
         };
         changes.push(ChangedFile {
             status: std::str::from_utf8(xy)?.replace('.', " "),
-            path: String::from_utf8_lossy(path).into_owned(),
+            path: path.into(),
             original_path,
         });
     }
@@ -121,17 +120,23 @@ mod tests {
         let files = status.changes;
         assert_eq!(files.len(), 4);
         assert_eq!(
-            (&*files[0].status, &*files[0].path),
+            (&*files[0].status, files[0].path.to_str().unwrap()),
             (" M", " leading space.txt")
         );
-        assert_eq!((&*files[1].status, &*files[1].path), ("R ", "new name.txt"));
         assert_eq!(
-            files[1].original_path.as_deref(),
-            Some("# branch.upstream fake")
+            (&*files[1].status, files[1].path.to_str().unwrap()),
+            ("R ", "new name.txt")
         );
-        assert_eq!((&*files[2].status, &*files[2].path), ("UU", "冲突.txt"));
         assert_eq!(
-            (&*files[3].status, &*files[3].path),
+            files[1].original_path.as_ref().unwrap(),
+            "# branch.upstream fake"
+        );
+        assert_eq!(
+            (&*files[2].status, files[2].path.to_str().unwrap()),
+            ("UU", "冲突.txt")
+        );
+        assert_eq!(
+            (&*files[3].status, files[3].path.to_str().unwrap()),
             ("??", "new\nfile.txt")
         );
     }

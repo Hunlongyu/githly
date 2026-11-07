@@ -1,4 +1,4 @@
-use crate::i18n::messages;
+use crate::i18n::{Locale, LocalizedText, messages};
 use crate::{
     config::{Appearance, Config, ConfigStore},
     git::{ChangeScope, ChangedFile, Commit, Git, Repository},
@@ -10,7 +10,7 @@ use gpui_kit::component::{
     diff::{Diff, DiffMode, DiffState},
     h_flex,
     menu::{DropdownMenu, PopupMenuItem},
-    notification::Notification,
+    notification::{Notification, NotificationType},
     v_flex,
 };
 use gpui_kit::prelude::FluentBuilder;
@@ -70,13 +70,19 @@ fn matches_query(text: &str, query: &str) -> bool {
         && text.to_lowercase().contains(query)
 }
 
+fn notification(kind: NotificationType, text: LocalizedText) -> Notification {
+    Notification::new()
+        .with_type(kind)
+        .content(move |_, _, _| div().text_sm().child(text.to_string()).into_any_element())
+}
+
 pub struct GitPanel {
     store: ConfigStore,
     config: Config,
-    config_error: Option<String>,
+    config_error: Option<LocalizedText>,
     git: Option<Git>,
     repository: Option<Arc<Repository>>,
-    git_error: Option<String>,
+    git_error: Option<LocalizedText>,
     detecting: bool,
     stash_tab: bool,
     collapsed_change_groups: [bool; 2],
@@ -95,16 +101,16 @@ pub struct GitPanel {
     detail_files_scroll: UniformListScrollHandle,
     diff: Entity<DiffState>,
     image_diff: Option<image_diff::ImageDiff>,
-    diff_message: String,
-    commit_body: String,
+    diff_message: Option<LocalizedText>,
+    commit_body: LocalizedText,
     stash_revision: Option<String>,
-    stash_untracked_paths: std::collections::HashSet<String>,
+    stash_untracked_paths: std::collections::HashSet<bstr::BString>,
     generation: u64,
     detect_task: Option<Task<()>>,
     load_task: Option<Task<()>>,
     refresh_task: Option<auto_refresh::AutoRefresh>,
     project_generation: u64,
-    refresh_error: Option<String>,
+    refresh_error: Option<LocalizedText>,
     window: AnyWindowHandle,
     initial_history_limit: usize,
     history_scroll: UniformListScrollHandle,
@@ -113,7 +119,7 @@ pub struct GitPanel {
     history_loading: bool,
     history_near_end: bool,
     history_load_requested: bool,
-    history_error: Option<String>,
+    history_error: Option<LocalizedText>,
     history_retry_after: Option<std::time::Instant>,
     history_filter_task: Option<Task<()>>,
     history_filter_generation: Arc<AtomicU64>,
@@ -142,7 +148,7 @@ impl GitPanel {
     pub fn new(
         store: ConfigStore,
         config: Config,
-        config_error: Option<String>,
+        config_error: Option<LocalizedText>,
         initial_project: Option<PathBuf>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -190,8 +196,8 @@ impl GitPanel {
             detail_files_scroll: UniformListScrollHandle::new(),
             diff: cx.new(|cx| DiffState::new([], cx).with_mode(DiffMode::Split)),
             image_diff: None,
-            diff_message: String::new(),
-            commit_body: String::new(),
+            diff_message: None,
+            commit_body: String::new().into(),
             stash_revision: None,
             stash_untracked_paths: std::collections::HashSet::new(),
             generation: 0,
@@ -269,7 +275,10 @@ impl GitPanel {
         self.save(cx);
         self.tip(
             "recent",
-            Some(Notification::success(messages().recent_cleared())),
+            Some(notification(
+                NotificationType::Success,
+                LocalizedText::new(Locale::recent_cleared),
+            )),
             cx,
         );
         cx.notify();
@@ -293,7 +302,10 @@ impl GitPanel {
                 let _ = this.update(cx, |this, cx| {
                     this.tip(
                         "save",
-                        Some(Notification::error(messages().save_failed(error))),
+                        Some(notification(
+                            NotificationType::Error,
+                            LocalizedText::with_error(error, |l, e| l.save_failed(e)),
+                        )),
                         cx,
                     );
                 });
@@ -322,7 +334,7 @@ impl GitPanel {
                         }
                     }
                     Err(error) => {
-                        this.git_error = Some(format!("{error:#}"));
+                        this.git_error = Some(LocalizedText::diagnostic(error));
                     }
                 }
                 cx.notify();
@@ -383,8 +395,8 @@ impl GitPanel {
         self.selected_file = None;
         self.diff.update(cx, |diff, cx| diff.set_files([], cx));
         self.clear_image_diff(cx);
-        self.diff_message.clear();
-        self.commit_body = String::new();
+        self.diff_message = None;
+        self.commit_body = String::new().into();
         self.stash_revision = None;
         self.stash_untracked_paths = std::collections::HashSet::new();
     }
@@ -435,7 +447,13 @@ impl GitPanel {
                         showed_loading_tip = true;
                         panel.tip(
                             "project",
-                            Some(Notification::info(messages().loading_project()).autohide(false)),
+                            Some(
+                                notification(
+                                    NotificationType::Info,
+                                    LocalizedText::new(Locale::loading_project),
+                                )
+                                .autohide(false),
+                            ),
                             cx,
                         );
                     }
@@ -452,7 +470,10 @@ impl GitPanel {
                         if showed_loading_tip {
                             this.tip(
                                 "project",
-                                Some(Notification::success(messages().project_opened())),
+                                Some(notification(
+                                    NotificationType::Success,
+                                    LocalizedText::new(Locale::project_opened),
+                                )),
                                 cx,
                             );
                         }
@@ -470,7 +491,10 @@ impl GitPanel {
                     Err(error) => {
                         this.tip(
                             "project",
-                            Some(Notification::error(format!("{error:#}"))),
+                            Some(notification(
+                                NotificationType::Error,
+                                LocalizedText::diagnostic(error),
+                            )),
                             cx,
                         );
                     }
@@ -495,7 +519,7 @@ impl GitPanel {
         self.clear_detail(cx);
         self.selected_commit = Some(commit.clone());
         self.detail_open = true;
-        self.diff_message = messages().loading_files().into();
+        self.diff_message = Some(LocalizedText::new(Locale::loading_files));
         let generation = self.generation;
         let task = cx.background_spawn(async move {
             futures_lite::future::try_zip(
@@ -515,12 +539,12 @@ impl GitPanel {
                         this.commit_body = body;
                         this.files = files;
                         if this.files.is_empty() {
-                            this.diff_message = messages().commit_no_diff().into();
+                            this.diff_message = Some(LocalizedText::new(Locale::commit_no_diff));
                         } else {
                             this.select_file(0, cx);
                         }
                     }
-                    Err(error) => this.diff_message = format!("{error:#}"),
+                    Err(error) => this.diff_message = Some(LocalizedText::diagnostic(error)),
                 }
                 cx.notify();
             });
@@ -582,7 +606,7 @@ impl GitPanel {
             return;
         };
         self.selected_file = Some(index);
-        self.diff_message = messages().loading_diff().into();
+        self.diff_message = Some(LocalizedText::new(Locale::loading_diff));
         self.clear_image_diff(cx);
         self.diff.update(cx, |diff, cx| diff.set_files([], cx));
         let generation = self.generation;
@@ -619,19 +643,17 @@ impl GitPanel {
                 }
                 match result {
                     Ok(diff_data::Content::Image(images)) => {
-                        this.diff_message.clear();
+                        this.diff_message = None;
                         this.image_diff = Some(images);
                     }
                     Ok(diff_data::Content::Text(files)) => {
-                        this.diff_message = if files.is_empty() {
-                            messages().no_text_diff().into()
-                        } else {
-                            String::new()
-                        };
+                        this.diff_message = files
+                            .is_empty()
+                            .then(|| LocalizedText::new(Locale::no_text_diff));
                         this.diff.update(cx, |diff, cx| diff.set_files(files, cx));
                     }
                     Err(error) => {
-                        this.diff_message = format!("{error:#}");
+                        this.diff_message = Some(LocalizedText::diagnostic(error));
                     }
                 }
                 cx.notify();
@@ -786,7 +808,7 @@ impl Render for GitPanel {
                             .dropdown_caret(true)
                             .ghost()
                             .small()
-                            .label(repository.branch.clone()),
+                            .label(repository.branch_label().to_owned()),
                     )
                     .on_open_change(cx.listener(|this, open: &bool, window, cx| {
                         this.branch_open = *open;
@@ -997,7 +1019,7 @@ impl Render for GitPanel {
                         .p_3()
                         .text_sm()
                         .text_color(cx.theme().danger)
-                        .child(error),
+                        .child(error.to_string()),
                 )
             })
             .child(if self.repository.is_some() {

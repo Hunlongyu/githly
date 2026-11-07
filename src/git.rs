@@ -1,5 +1,6 @@
-use crate::i18n::messages;
+use crate::i18n::{Locale, LocalizedText, messages};
 use anyhow::{Context, Result, bail};
+use bstr::{BString, ByteSlice};
 use futures_lite::io::{AsyncRead, AsyncReadExt};
 use std::{
     ffi::{OsStr, OsString},
@@ -31,9 +32,18 @@ pub struct Git {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChangedFile {
-    pub path: String,
-    pub original_path: Option<String>,
+    pub path: BString,
+    pub original_path: Option<BString>,
     pub status: String,
+}
+
+impl ChangedFile {
+    pub fn display_path(&self) -> std::borrow::Cow<'_, str> {
+        match self.path.to_str() {
+            Ok(path) => path.into(),
+            Err(_) => self.path.escape_bytes().to_string().into(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -51,9 +61,9 @@ pub struct Commit {
 pub struct Repository {
     pub root: PathBuf,
     pub has_other_worktrees: bool,
-    pub worktree_error: Option<String>,
+    pub worktree_error: Option<LocalizedText>,
     git_dir: PathBuf,
-    pub operation_states: Vec<String>,
+    pub operation_states: Vec<LocalizedText>,
     pub branch: String,
     pub head: Option<String>,
     pub tracking: Option<BranchTracking>,
@@ -71,6 +81,19 @@ pub struct Repository {
     pub history_pending: bool,
     graph_lanes: Arc<[String]>,
     history_key: Vec<u8>,
+}
+
+impl Repository {
+    pub fn branch_label(&self) -> &str {
+        if self.branch == "(detached)"
+            && self.head.is_some()
+            && !self.branches.iter().any(|branch| branch.current)
+        {
+            messages().detached_head()
+        } else {
+            &self.branch
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -139,22 +162,23 @@ impl HistoryScope {
 
 impl Git {
     pub async fn detect(configured: Option<PathBuf>) -> Result<Self> {
+        let binary = if cfg!(windows) { "git.exe" } else { "git" };
         let executable = if let Some(path) = configured {
             anyhow::ensure!(
                 path.is_absolute() && path.is_file(),
-                messages().git_path_missing(path.display())
+                LocalizedText::new(|l| l.git_path_missing(path.display()))
             );
             path
         } else {
-            find_on_path().context(messages().git_not_on_path())?
+            which::which(binary).with_context(|| LocalizedText::new(Locale::git_not_on_path))?
         };
         let name = executable
             .file_name()
             .and_then(OsStr::to_str)
             .unwrap_or_default();
         anyhow::ensure!(
-            name.eq_ignore_ascii_case(if cfg!(windows) { "git.exe" } else { "git" }),
-            messages().select_git_binary()
+            name.eq_ignore_ascii_case(binary),
+            LocalizedText::new(Locale::select_git_binary)
         );
         let mut git = Self {
             executable,
@@ -164,7 +188,7 @@ impl Git {
         let version = String::from_utf8_lossy(&output).trim().to_string();
         anyhow::ensure!(
             version.starts_with("git version "),
-            messages().invalid_git_version()
+            LocalizedText::new(Locale::invalid_git_version)
         );
         git.version = version;
         Ok(git)
@@ -175,14 +199,20 @@ impl Git {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        self.run_with_stdout(root, args, |stdout| read_limited(stdout, 8 * 1024 * 1024))
-            .await
+        self.run_with_stdout(
+            root,
+            args,
+            |status, _| status.success(),
+            |stdout| read_limited(stdout, 8 * 1024 * 1024),
+        )
+        .await
     }
 
     async fn run_with_stdout<I, S, T, F>(
         &self,
         root: Option<&Path>,
         args: I,
+        accept: impl FnOnce(std::process::ExitStatus, &T) -> bool,
         read_stdout: impl FnOnce(async_process::ChildStdout) -> F,
     ) -> Result<T>
     where
@@ -213,9 +243,17 @@ impl Git {
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
-        let mut child = command.spawn().context(messages().start_git())?;
-        let stdout = child.stdout.take().context(messages().read_git_output())?;
-        let stderr = child.stderr.take().context(messages().read_git_stderr())?;
+        let mut child = command
+            .spawn()
+            .with_context(|| LocalizedText::new(Locale::start_git))?;
+        let stdout = child
+            .stdout
+            .take()
+            .with_context(|| LocalizedText::new(Locale::read_git_output))?;
+        let stderr = child
+            .stderr
+            .take()
+            .with_context(|| LocalizedText::new(Locale::read_git_stderr))?;
         let (status, stdout, stderr) = futures_lite::future::race(
             async {
                 let (stdout, stderr) =
@@ -225,11 +263,11 @@ impl Git {
             },
             async {
                 async_io::Timer::after(Duration::from_secs(20)).await;
-                bail!(messages().git_timeout())
+                bail!(LocalizedText::new(Locale::git_timeout))
             },
         )
         .await?;
-        if !status.success() {
+        if !accept(status, &stdout) {
             bail!("{}", String::from_utf8_lossy(&stderr).trim());
         }
         Ok(stdout)
@@ -239,8 +277,12 @@ impl Git {
         let root = self
             .run(Some(path), ["rev-parse", "--show-toplevel"])
             .await
-            .context(messages().invalid_repository())?;
-        let root = PathBuf::from(String::from_utf8_lossy(&root).trim());
+            .with_context(|| LocalizedText::new(Locale::invalid_repository))?;
+        let root = root
+            .strip_suffix(b"\n")
+            .unwrap_or(&root)
+            .to_path()?
+            .to_owned();
         self.read_repository(root, None, true, true, initial_limit)
             .await
     }
@@ -275,7 +317,8 @@ impl Git {
             || next.operation_states != previous.operation_states
             || !Arc::ptr_eq(&next.stashes, &previous.stashes)
             || next.has_other_worktrees != previous.has_other_worktrees
-            || next.worktree_error != previous.worktree_error;
+            || next.worktree_error.as_ref().map(ToString::to_string)
+                != previous.worktree_error.as_ref().map(ToString::to_string);
         Ok(changed.then_some(next))
     }
 
@@ -305,11 +348,14 @@ impl Git {
                 ["status", "--porcelain=v1", "-z", "--untracked-files=normal"],
             )
             .await?;
-        anyhow::ensure!(status.is_empty(), messages().dirty_checkout());
+        anyhow::ensure!(
+            status.is_empty(),
+            LocalizedText::new(Locale::dirty_checkout)
+        );
         let git_dir = self.git_dir(root).await?;
         anyhow::ensure!(
             operation_states(&git_dir).is_empty(),
-            messages().busy_checkout()
+            LocalizedText::new(Locale::busy_checkout)
         );
         let reference = format!("refs/heads/{name}");
         let local = self
@@ -326,7 +372,7 @@ impl Git {
             .await?;
         anyhow::ensure!(
             local.strip_suffix(b"\0\n") == Some(reference.as_bytes()),
-            messages().local_checkout_only()
+            LocalizedText::new(Locale::local_checkout_only)
         );
         // Writes are not subject to the read timeout/cancellation policy.
         let mut command = std::process::Command::new(&self.executable);
@@ -347,8 +393,14 @@ impl Git {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()?;
-        let stdout = child.stdout.take().context(messages().read_git_output())?;
-        let stderr = child.stderr.take().context(messages().read_git_error())?;
+        let stdout = child
+            .stdout
+            .take()
+            .with_context(|| LocalizedText::new(Locale::read_git_output))?;
+        let stderr = child
+            .stderr
+            .take()
+            .with_context(|| LocalizedText::new(Locale::read_git_error))?;
         let (_, stderr) =
             futures_lite::future::try_zip(drain_capped(stdout), drain_capped(stderr)).await?;
         let status = child.status().await?;
@@ -364,7 +416,11 @@ impl Git {
         let output = self
             .run(Some(root), ["rev-parse", "--absolute-git-dir"])
             .await?;
-        Ok(PathBuf::from(String::from_utf8_lossy(&output).trim()))
+        Ok(output
+            .strip_suffix(b"\n")
+            .unwrap_or(&output)
+            .to_path()?
+            .to_owned())
     }
 
     async fn read_repository(
@@ -401,6 +457,7 @@ impl Git {
                 "refs/remotes",
                 "refs/tags",
             ],
+            |status, _| status.success(),
             read_refs,
         );
         let lists = async {
@@ -443,7 +500,7 @@ impl Git {
                     ),
                     Err(error) => (
                         previous.is_some_and(|repo| repo.has_other_worktrees),
-                        Some(format!("{error:#}")),
+                        Some(LocalizedText::diagnostic(error)),
                     ),
                 }
             };
@@ -543,14 +600,6 @@ impl Git {
                 },
                 |repo| repo.branches.clone(),
             );
-        let branch = if branch == "(detached)"
-            && head.is_some()
-            && !branches.iter().any(|branch| branch.current)
-        {
-            messages().detached_head().into()
-        } else {
-            branch
-        };
         let graph = unchanged_history
             .map(|repo| repo.graph.clone())
             .unwrap_or_else(|| {
@@ -574,7 +623,7 @@ impl Git {
             .filter(|file| file.status.contains('U') || file.status == "AA" || file.status == "DD")
             .count();
         if conflicts > 0 {
-            operation_states.push(messages().conflicts(conflicts));
+            operation_states.push(LocalizedText::new(|l| l.conflicts(conflicts)));
         }
 
         Ok(Repository {
@@ -629,12 +678,12 @@ impl Git {
             .map(|pair| ChangedFile {
                 original_path: None,
                 status: String::from_utf8_lossy(pair[0]).trim().into(),
-                path: String::from_utf8_lossy(pair[1]).into(),
+                path: pair[1].into(),
             })
             .collect())
     }
 
-    pub async fn commit_body(&self, root: &Path, id: &str) -> Result<String> {
+    pub async fn commit_body(&self, root: &Path, id: &str) -> Result<LocalizedText> {
         let output = self
             .run(Some(root), ["show", "-s", "--format=%B", id, "--"])
             .await?;
@@ -644,9 +693,9 @@ impl Git {
             while !message.is_char_boundary(end) {
                 end -= 1;
             }
-            Ok(messages().truncated_message(&message[..end]))
+            Ok(LocalizedText::new(|l| l.truncated_message(&message[..end])))
         } else {
-            Ok(message.trim().to_string())
+            Ok(LocalizedText::Verbatim(message.trim().to_owned()))
         }
     }
 
@@ -656,11 +705,21 @@ impl Git {
         &self,
         root: &Path,
         revision: Option<&str>,
-        path: &str,
+        path: impl AsRef<[u8]>,
     ) -> Result<Option<Vec<u8>>> {
+        let path = path.as_ref().to_os_str()?;
         if revision == Some(":") {
             let entry = self
-                .run(Some(root), ["ls-files", "--stage", "-z", "--", path])
+                .run(
+                    Some(root),
+                    [
+                        OsStr::new("ls-files"),
+                        "--stage".as_ref(),
+                        "-z".as_ref(),
+                        "--".as_ref(),
+                        path,
+                    ],
+                )
                 .await?;
             if entry.is_empty() {
                 return Ok(None);
@@ -669,12 +728,12 @@ impl Git {
             let fields: Vec<_> = std::str::from_utf8(header)?.split_whitespace().collect();
             anyhow::ensure!(
                 fields.len() == 3 && fields[2] == "0" && fields[0].starts_with("100"),
-                messages().invalid_index_image()
+                LocalizedText::new(Locale::invalid_index_image)
             );
             let size = self.run(Some(root), ["cat-file", "-s", fields[1]]).await?;
             anyhow::ensure!(
                 std::str::from_utf8(&size)?.trim().parse::<u64>()? <= IMAGE_FILE_LIMIT,
-                messages().image_too_large()
+                LocalizedText::new(Locale::image_too_large)
             );
             return self
                 .run(Some(root), ["cat-file", "blob", fields[1]])
@@ -683,7 +742,17 @@ impl Git {
         }
         if let Some(revision) = revision {
             let entry = self
-                .run(Some(root), ["ls-tree", "-l", "-z", revision, "--", path])
+                .run(
+                    Some(root),
+                    [
+                        OsStr::new("ls-tree"),
+                        "-l".as_ref(),
+                        "-z".as_ref(),
+                        revision.as_ref(),
+                        "--".as_ref(),
+                        path,
+                    ],
+                )
                 .await?;
             if entry.is_empty() {
                 return Ok(None);
@@ -696,11 +765,11 @@ impl Git {
             let fields: Vec<_> = header.split_whitespace().collect();
             anyhow::ensure!(
                 fields.len() == 4 && fields[0].starts_with("100") && fields[1] == "blob",
-                messages().invalid_image_version()
+                LocalizedText::new(Locale::invalid_image_version)
             );
             anyhow::ensure!(
                 fields[3].parse::<u64>()? <= IMAGE_FILE_LIMIT,
-                messages().image_too_large()
+                LocalizedText::new(Locale::image_too_large)
             );
             self.run(Some(root), ["cat-file", "blob", fields[2]])
                 .await
@@ -712,12 +781,17 @@ impl Git {
                 let metadata = match std::fs::symlink_metadata(&path) {
                     Ok(metadata) => metadata,
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-                    Err(error) => return Err(error).context(messages().read_image()),
+                    Err(error) => {
+                        return Err(error).with_context(|| LocalizedText::new(Locale::read_image));
+                    }
                 };
-                anyhow::ensure!(metadata.is_file(), messages().invalid_image_path());
+                anyhow::ensure!(
+                    metadata.is_file(),
+                    LocalizedText::new(Locale::invalid_image_path)
+                );
                 anyhow::ensure!(
                     metadata.len() <= IMAGE_FILE_LIMIT,
-                    messages().image_too_large()
+                    LocalizedText::new(Locale::image_too_large)
                 );
                 let mut bytes = Vec::new();
                 std::fs::File::open(path)?
@@ -725,7 +799,7 @@ impl Git {
                     .read_to_end(&mut bytes)?;
                 anyhow::ensure!(
                     bytes.len() as u64 <= IMAGE_FILE_LIMIT,
-                    messages().image_too_large()
+                    LocalizedText::new(Locale::image_too_large)
                 );
                 Ok(Some(bytes))
             })
@@ -753,6 +827,8 @@ impl Git {
             self.run(
                 Some(root),
                 [
+                    "-c",
+                    "core.quotePath=true",
                     "show",
                     "--format=",
                     "--diff-merges=first-parent",
@@ -761,20 +837,26 @@ impl Git {
                     "--no-renames",
                     id,
                     "--",
-                    &file.path,
-                ],
+                ]
+                .map(OsStr::new)
+                .into_iter()
+                .chain([file.path.to_os_str()?]),
             )
             .await?
         } else if file.status == "??" {
-            let root = root.to_owned();
-            let name = file.path.clone();
-            return blocking::unblock(move || untracked::patch(&root, &name)).await;
+            return untracked::patch(self, root, file.path.to_path()?).await;
         } else {
-            let mut args: Vec<OsString> =
-                ["diff", "--no-ext-diff", "--no-textconv", "--no-renames"]
-                    .into_iter()
-                    .map(OsString::from)
-                    .collect();
+            let mut args: Vec<OsString> = [
+                "-c",
+                "core.quotePath=true",
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-renames",
+            ]
+            .into_iter()
+            .map(OsString::from)
+            .collect();
             match scope {
                 ChangeScope::Staged => args.push("--cached".into()),
                 ChangeScope::Working => {}
@@ -790,13 +872,16 @@ impl Git {
                 }
             }
             args.push("--".into());
-            args.push(file.path.clone().into());
+            args.push(file.path.to_os_str()?.to_owned());
             if let Some(original) = &file.original_path {
-                args.push(original.into());
+                args.push(original.to_os_str()?.to_owned());
             }
             self.run(Some(root), args).await?
         };
-        anyhow::ensure!(output.len() <= DIFF_LIMIT, messages().diff_too_large());
+        anyhow::ensure!(
+            output.len() <= DIFF_LIMIT,
+            LocalizedText::new(Locale::diff_too_large)
+        );
         Ok(String::from_utf8_lossy(&output).into())
     }
 
@@ -824,7 +909,10 @@ async fn drain_capped(mut reader: impl AsyncRead + Unpin) -> Result<Vec<u8>> {
 async fn read_limited(reader: impl AsyncRead + Unpin, limit: u64) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     reader.take(limit + 1).read_to_end(&mut bytes).await?;
-    anyhow::ensure!(bytes.len() as u64 <= limit, messages().output_too_large());
+    anyhow::ensure!(
+        bytes.len() as u64 <= limit,
+        LocalizedText::new(Locale::output_too_large)
+    );
     Ok(bytes)
 }
 
@@ -846,13 +934,13 @@ async fn read_refs(reader: impl AsyncRead + Unpin) -> Result<(Vec<u8>, [u8; 32])
         if count == 0 {
             break;
         }
-        anyhow::ensure!(count <= LIMIT, messages().ref_too_large());
+        anyhow::ensure!(count <= LIMIT, LocalizedText::new(Locale::ref_too_large));
         digest.update(&record);
         // Tags affect log decorations, but never appear in the branch picker or roots.
         if !record.starts_with(b"refs/tags/") {
             anyhow::ensure!(
                 branches.len() + count <= LIMIT,
-                messages().branches_too_large()
+                LocalizedText::new(Locale::branches_too_large)
             );
             branches.extend_from_slice(&record);
         }
@@ -860,38 +948,21 @@ async fn read_refs(reader: impl AsyncRead + Unpin) -> Result<(Vec<u8>, [u8; 32])
     Ok((branches, digest.finalize().into()))
 }
 
-fn operation_states(git_dir: &Path) -> Vec<String> {
+fn operation_states(git_dir: &Path) -> Vec<LocalizedText> {
     [
-        ("MERGE_HEAD", messages().merging()),
-        ("rebase-merge", messages().rebasing()),
-        ("rebase-apply", messages().applying_patch()),
-        ("CHERRY_PICK_HEAD", messages().cherry_picking()),
-        ("REVERT_HEAD", messages().reverting()),
-        ("BISECT_LOG", messages().bisecting()),
+        ("MERGE_HEAD", Locale::merging as fn(Locale) -> &'static str),
+        ("rebase-merge", Locale::rebasing),
+        ("rebase-apply", Locale::applying_patch),
+        ("CHERRY_PICK_HEAD", Locale::cherry_picking),
+        ("REVERT_HEAD", Locale::reverting),
+        ("BISECT_LOG", Locale::bisecting),
     ]
     .into_iter()
     .filter(|(marker, _)| git_dir.join(marker).exists())
-    .map(|(_, label)| label.to_string())
+    .map(|(_, label)| LocalizedText::new(label))
     .collect()
 }
 
-fn find_on_path() -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|dir| dir.join(if cfg!(windows) { "git.exe" } else { "git" }))
-        .find(|file| {
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                file.metadata()
-                    .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-            }
-            #[cfg(windows)]
-            {
-                file.is_file()
-            }
-        })
-}
 fn parse_log(bytes: &[u8]) -> Vec<Commit> {
     let fields: Vec<_> = bytes.split(|b| *b == 0).collect();
     fields
@@ -924,11 +995,9 @@ fn parse_status(bytes: &[u8]) -> Vec<ChangedFile> {
             continue;
         }
         let status = String::from_utf8_lossy(&record[..2]).into_owned();
-        let path = String::from_utf8_lossy(&record[3..]).into_owned();
+        let path = record[3..].into();
         let original_path = if status.contains('R') || status.contains('C') {
-            records
-                .next()
-                .map(|path| String::from_utf8_lossy(path).into_owned())
+            records.next().map(BString::from)
         } else {
             None
         };
@@ -1054,7 +1123,7 @@ mod tests {
         assert_eq!(files.len(), 3);
         assert_eq!(files[0].path, "src/a b.rs");
         assert_eq!(files[1].path, "新文件.rs");
-        assert_eq!(files[1].original_path.as_deref(), Some("旧文件.rs"));
+        assert_eq!(files[1].original_path.as_ref().unwrap(), "旧文件.rs");
         assert_eq!(files[2].path, ":special.txt");
     }
     #[test]
@@ -1151,7 +1220,7 @@ mod tests {
             let repository = git.open(root, 46).await.unwrap();
             let renamed = &repository.changes[0];
             assert_eq!(renamed.path, "新 图片.png");
-            assert_eq!(renamed.original_path.as_deref(), Some("旧 图片.png"));
+            assert_eq!(renamed.original_path.as_ref().unwrap(), "旧 图片.png");
             assert_eq!(
                 git.image_file(
                     root,

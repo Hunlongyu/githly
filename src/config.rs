@@ -1,4 +1,4 @@
-use crate::i18n::messages;
+use crate::i18n::{Locale, LocalizedText};
 use anyhow::{Context, Result};
 use directories::BaseDirs;
 use serde::{Deserialize, Serialize};
@@ -30,7 +30,15 @@ pub enum MotionPreference {
 #[serde(default)]
 pub struct Config {
     pub schema_version: u32,
+    #[serde(
+        serialize_with = "paths::serialize_optional",
+        deserialize_with = "paths::deserialize_optional"
+    )]
     pub git_path: Option<PathBuf>,
+    #[serde(
+        serialize_with = "paths::serialize_list",
+        deserialize_with = "paths::deserialize_list"
+    )]
     pub recent_projects: Vec<PathBuf>,
     pub appearance: Appearance,
     pub language: crate::i18n::Language,
@@ -39,6 +47,68 @@ pub struct Config {
     pub file_panel_width: f32,
     pub detail_panel_height: f32,
     pub updates: crate::update::Preferences,
+}
+
+// Keep ordinary paths as JSON strings for compatibility. Serde's native
+// OsString representation preserves bytes (Unix) or wide code units (Windows).
+mod paths {
+    use super::*;
+    use serde::{Deserializer, Serializer};
+    use std::ffi::OsString;
+
+    #[derive(Serialize, Deserialize)]
+    #[serde(untagged)]
+    enum StoredPath {
+        Text(String),
+        Native(OsString),
+    }
+
+    impl From<&PathBuf> for StoredPath {
+        fn from(path: &PathBuf) -> Self {
+            match path.to_str() {
+                Some(text) => Self::Text(text.to_owned()),
+                None => Self::Native(path.as_os_str().to_owned()),
+            }
+        }
+    }
+
+    impl From<StoredPath> for PathBuf {
+        fn from(path: StoredPath) -> Self {
+            match path {
+                StoredPath::Text(text) => text.into(),
+                StoredPath::Native(native) => native.into(),
+            }
+        }
+    }
+
+    pub(super) fn serialize_optional<S: Serializer>(
+        path: &Option<PathBuf>,
+        s: S,
+    ) -> Result<S::Ok, S::Error> {
+        path.as_ref().map(StoredPath::from).serialize(s)
+    }
+
+    pub(super) fn deserialize_optional<'de, D: Deserializer<'de>>(
+        d: D,
+    ) -> Result<Option<PathBuf>, D::Error> {
+        Ok(Option::<StoredPath>::deserialize(d)?.map(PathBuf::from))
+    }
+
+    pub(super) fn serialize_list<S: Serializer>(
+        paths: &[PathBuf],
+        s: S,
+    ) -> Result<S::Ok, S::Error> {
+        s.collect_seq(paths.iter().map(StoredPath::from))
+    }
+
+    pub(super) fn deserialize_list<'de, D: Deserializer<'de>>(
+        d: D,
+    ) -> Result<Vec<PathBuf>, D::Error> {
+        Ok(Vec::<StoredPath>::deserialize(d)?
+            .into_iter()
+            .map(PathBuf::from)
+            .collect())
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -95,7 +165,8 @@ pub struct ConfigStore {
 
 impl ConfigStore {
     pub fn for_app() -> Result<Self> {
-        let base = BaseDirs::new().context(messages().config_dir_missing())?;
+        let base =
+            BaseDirs::new().with_context(|| LocalizedText::new(Locale::config_dir_missing))?;
         Ok(Self {
             path: base.config_dir().join("githly").join("config.json"),
         })
@@ -108,11 +179,16 @@ impl ConfigStore {
                 return Ok(Config::default());
             }
             Err(error) => {
-                return Err(error).with_context(|| messages().cannot_read(self.path.display()));
+                return Err(error)
+                    .with_context(|| LocalizedText::new(|l| l.cannot_read(self.path.display())));
             }
         };
-        let config: Config = serde_json::from_slice(&bytes).context(messages().invalid_config())?;
-        anyhow::ensure!(config.schema_version == 1, messages().unsupported_config());
+        let config: Config = serde_json::from_slice(&bytes)
+            .with_context(|| LocalizedText::new(Locale::invalid_config))?;
+        anyhow::ensure!(
+            config.schema_version == 1,
+            LocalizedText::new(Locale::unsupported_config)
+        );
         Ok(config)
     }
 
@@ -120,17 +196,18 @@ impl ConfigStore {
         let directory = self
             .path
             .parent()
-            .context(messages().invalid_config_dir())?;
-        fs::create_dir_all(directory).context(messages().create_config_dir())?;
-        let mut temporary =
-            tempfile::NamedTempFile::new_in(directory).context(messages().write_config())?;
+            .with_context(|| LocalizedText::new(Locale::invalid_config_dir))?;
+        fs::create_dir_all(directory)
+            .with_context(|| LocalizedText::new(Locale::create_config_dir))?;
+        let mut temporary = tempfile::NamedTempFile::new_in(directory)
+            .with_context(|| LocalizedText::new(Locale::write_config))?;
         temporary
             .write_all(&serde_json::to_vec_pretty(config)?)
-            .context(messages().write_config())?;
+            .with_context(|| LocalizedText::new(Locale::write_config))?;
         temporary
             .as_file()
             .sync_all()
-            .context(messages().write_config())?;
+            .with_context(|| LocalizedText::new(Locale::write_config))?;
         let mut path = temporary.into_temp_path();
         let mut retries = 0;
         loop {
@@ -147,7 +224,9 @@ impl ConfigStore {
                     std::thread::sleep(std::time::Duration::from_millis(1 << retries));
                     retries += 1;
                 }
-                Err(error) => return Err(error).context(messages().save_config()),
+                Err(error) => {
+                    return Err(error).with_context(|| LocalizedText::new(Locale::save_config));
+                }
             }
         }
     }
@@ -156,6 +235,28 @@ impl ConfigStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_paths_do_not_prevent_saving_other_preferences() {
+        use std::ffi::OsString;
+        #[cfg(unix)]
+        let native = <OsString as std::os::unix::ffi::OsStringExt>::from_vec(b"repo-\xff".to_vec());
+        #[cfg(windows)]
+        let native = <OsString as std::os::windows::ffi::OsStringExt>::from_wide(&[0x61, 0xd800]);
+        let path = PathBuf::from(native);
+        let config = Config {
+            recent_projects: vec![PathBuf::from("existing"), path.clone()],
+            git_path: Some(path),
+            language: crate::i18n::Language::Chinese,
+            ..Config::default()
+        };
+        let json = serde_json::to_value(&config).unwrap();
+        assert_eq!(json["recent_projects"][0], "existing");
+        let restored: Config = serde_json::from_value(json).unwrap();
+        assert_eq!(restored.recent_projects, config.recent_projects);
+        assert_eq!(restored.git_path, config.git_path);
+        assert_eq!(restored.language, config.language);
+    }
+
     #[test]
     fn config_round_trip_and_recent_deduplication() {
         let dir = tempfile::tempdir().unwrap();

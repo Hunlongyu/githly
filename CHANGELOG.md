@@ -1,5 +1,19 @@
 # 更新日志
 
+## v0.1.5 · 2026-11-08
+
+- 在「设置 → 通用 → 语言」切换语言后，主窗口、设置、搜索提示和状态消息立即刷新。保留当前仓库和搜索内容。中文版统一使用「储藏」「工作树」和「标签」。
+- 设置新增「关于」，可查看版本、开发者并打开 GitHub 仓库。欢迎页使用应用图标，最近打开列表的清理按钮移至标题旁。
+- 改进特殊文件名的差异预览。未跟踪文件保留原始换行，可为名为 `-` 的文件生成可应用的补丁。最近记录中的非 UTF-8 路径也能随设置保存。
+- 检查更新时优先从 GitHub 正式版本取得当前平台所需安装包的大小和 SHA-256。缺少摘要时读取对应版本的更新清单，双语更新说明按当前语言显示。
+
+**English**
+
+- Changing the language in Settings → General immediately updates the main window, settings, search placeholders, and status messages. The current repository and search text are preserved.
+- Settings now has an About page with the version, developer, and GitHub repository. The welcome screen uses the application icon, and the clear-recents button sits beside the list heading.
+- Improved diff previews for unusual filenames. Untracked patches preserve line endings and apply correctly for a file named `-`. Settings also preserve recent project paths that contain non-UTF-8 bytes.
+- Update checks read the package size and SHA-256 for the current distribution from the GitHub release, falling back to its versioned manifest when the digest is unavailable. Bilingual release notes follow the selected language.
+
 ## v0.1.4 · 2026-11-07
 
 - 修复检测到新版后右上角的云下载按钮显示为空白的问题，一并补齐空 Stash 列表的图标。打开设置即可在标题旁查看正在运行的 Githly 版本。

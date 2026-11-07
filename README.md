@@ -55,7 +55,7 @@
 
 Install Git before opening a repository. Use Settings to choose its executable if it is not on PATH.
 
-Githly uses the first supported language in your system preferences (English or Simplified Chinese), with English as the fallback. To override it, open **Settings → Language**, choose a language, and restart Githly.
+Githly uses the first supported language in your system preferences (English or Simplified Chinese), with English as the fallback. Choose a language in **Settings → General → Language** to switch immediately.
 
 Download the latest installer or portable archive from **[GitHub Releases](https://github.com/Hunlongyu/githly/releases/latest)**. Every release includes changelog notes and `SHA256SUMS.txt` for checksum verification.
 

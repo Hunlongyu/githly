@@ -3,6 +3,8 @@ License: Apache-2.0; see LICENSE-APACHE. Original sources and locale files retai
 Selected by the root Cargo.toml [patch.crates-io] entry.
 
 Local changes:
+- src/diff/parser.rs: display non-UTF-8 bytes in Git-quoted paths as escapes
+  so their patches can be viewed. File operations use the application's raw path.
 - src/diff/mod.rs: increase the scaled code font by one logical pixel.
 - src/diff/mod.rs: keep ordinary split diffs at equal viewport widths in
   horizontal-scroll mode. One shared scrollbar moves code within clipped panes;

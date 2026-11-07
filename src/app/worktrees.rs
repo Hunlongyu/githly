@@ -5,7 +5,7 @@ use gpui_kit::component::tooltip::Tooltip;
 pub(super) fn dropdown(git: Git, root: PathBuf, panel: WeakEntity<GitPanel>) -> impl IntoElement {
     controls::button("worktrees")
         .ghost()
-        .label("worktree")
+        .label(messages().worktrees())
         .dropdown_caret(true)
         .dropdown_menu(move |menu, window, cx| {
             let git = git.clone();
@@ -43,7 +43,8 @@ fn worktree_item(
 ) -> PopupMenuItem {
     let current = entry.path == root;
     let path = entry.path.display().to_string();
-    let description = format!("{} · {}", entry.branch, entry.status);
+    let available = entry.available;
+    let target = entry.path.clone();
     PopupMenuItem::element(move |_, cx| {
         let full_path = path.clone();
         v_flex()
@@ -57,15 +58,15 @@ fn worktree_item(
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
                     .truncate()
-                    .child(description.clone()),
+                    .child(format!("{} · {}", entry.branch, entry.status_label())),
             )
             .tooltip(move |window, cx| Tooltip::new(full_path.clone()).build(window, cx))
     })
     .checked(current)
-    .disabled(!entry.available)
+    .disabled(!available)
     .on_click(move |_, _, cx| {
         if !current {
-            let _ = panel.update(cx, |panel, cx| panel.load_project(entry.path.clone(), cx));
+            let _ = panel.update(cx, |panel, cx| panel.load_project(target.clone(), cx));
         }
     })
 }

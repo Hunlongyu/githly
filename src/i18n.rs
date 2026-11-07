@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
-use std::sync::{LazyLock, OnceLock};
+use std::borrow::Cow;
+use std::sync::{Arc, LazyLock, RwLock};
 
 mod catalog;
 
@@ -16,6 +17,101 @@ pub enum Language {
 pub enum Locale {
     English,
     Chinese,
+}
+
+/// A label kept in a repository snapshot or UI state across language changes.
+#[derive(Clone, Debug)]
+pub enum LocalizedText {
+    Verbatim(String),
+    Translated {
+        english: Cow<'static, str>,
+        chinese: Cow<'static, str>,
+    },
+    Diagnostic {
+        error: Arc<anyhow::Error>,
+        render: fn(Locale, &anyhow::Error) -> String,
+    },
+}
+
+impl LocalizedText {
+    pub fn new<T: Into<Cow<'static, str>>>(render: impl Fn(Locale) -> T) -> Self {
+        Self::Translated {
+            english: render(Locale::English).into(),
+            chinese: render(Locale::Chinese).into(),
+        }
+    }
+
+    pub fn diagnostic(error: anyhow::Error) -> Self {
+        Self::with_error(error, |_, error| format!("{error:#}"))
+    }
+
+    pub fn with_error(error: anyhow::Error, render: fn(Locale, &anyhow::Error) -> String) -> Self {
+        Self::Diagnostic {
+            error: Arc::new(error),
+            render,
+        }
+    }
+
+    pub fn get(&self, locale: Locale) -> Cow<'_, str> {
+        match self {
+            Self::Verbatim(text) => text.as_str().into(),
+            Self::Translated { english, chinese } => match locale {
+                Locale::English => english.as_ref().into(),
+                Locale::Chinese => chinese.as_ref().into(),
+            },
+            Self::Diagnostic { error, render } => render(locale, error).into(),
+        }
+    }
+}
+
+impl std::fmt::Display for LocalizedText {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.get(messages()))
+    }
+}
+
+impl std::error::Error for LocalizedText {}
+
+impl PartialEq for LocalizedText {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Verbatim(a), Self::Verbatim(b)) => a == b,
+            (
+                Self::Translated {
+                    english: a,
+                    chinese: b,
+                },
+                Self::Translated {
+                    english: c,
+                    chinese: d,
+                },
+            ) => a == c && b == d,
+            (
+                Self::Diagnostic {
+                    error: a,
+                    render: f,
+                },
+                Self::Diagnostic {
+                    error: b,
+                    render: g,
+                },
+            ) => Arc::ptr_eq(a, b) && std::ptr::fn_addr_eq(*f, *g),
+            _ => false,
+        }
+    }
+}
+impl Eq for LocalizedText {}
+
+impl From<String> for LocalizedText {
+    fn from(text: String) -> Self {
+        Self::Verbatim(text)
+    }
+}
+
+impl From<&str> for LocalizedText {
+    fn from(text: &str) -> Self {
+        Self::Verbatim(text.to_owned())
+    }
 }
 
 impl Locale {
@@ -44,7 +140,7 @@ impl Locale {
 
 static SYSTEM: LazyLock<Locale> =
     LazyLock::new(|| Locale::from_preferences(sys_locale::get_locales()));
-static ACTIVE: OnceLock<Locale> = OnceLock::new();
+static ACTIVE: LazyLock<RwLock<Locale>> = LazyLock::new(|| RwLock::new(*SYSTEM));
 
 impl Language {
     pub fn resolve(self) -> Locale {
@@ -56,12 +152,15 @@ impl Language {
     }
 }
 
-pub fn init(preference: Language) {
-    ACTIVE.get_or_init(|| preference.resolve());
+pub fn set_language(preference: Language) -> Locale {
+    let locale = preference.resolve();
+    *ACTIVE.write().unwrap() = locale;
+    gpui_kit::component::set_locale(locale.tag());
+    locale
 }
 
 pub fn messages() -> Locale {
-    ACTIVE.get().copied().unwrap_or_else(|| *SYSTEM)
+    *ACTIVE.read().unwrap()
 }
 
 #[cfg(test)]
@@ -76,18 +175,6 @@ mod tests {
         assert_eq!(zh.settings(), "设置");
         assert_eq!(en.history_scope("开发/feature"), "History · 开发/feature");
         assert_eq!(zh.history_scope("开发/feature"), "历史 · 开发/feature");
-    }
-
-    #[test]
-    fn repeated_initialization_keeps_the_first_locale() {
-        init(Language::System);
-        let first = messages();
-        init(if first == Locale::Chinese {
-            Language::English
-        } else {
-            Language::Chinese
-        });
-        assert_eq!(messages(), first);
     }
 
     #[test]

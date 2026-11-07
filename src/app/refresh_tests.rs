@@ -106,7 +106,7 @@ fn startup_and_history_wait_for_user_selection(cx: &mut TestAppContext) {
     let root = directory.path().to_path_buf();
     let mut config = Config::default();
     config.remember_project(&root);
-    let (_window, panel) = cx.update(|cx| {
+    let (window, panel) = cx.update(|cx| {
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
             cx.new(|cx| {
                 GitPanel::new(
@@ -125,6 +125,14 @@ fn startup_and_history_wait_for_user_selection(cx: &mut TestAppContext) {
     });
 
     wait_for_git(cx, &panel, |panel| panel.git.is_some());
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("clear-recent").visible());
+        window.click("clear-recent", cx);
+        assert!(panel.read(cx).config.recent_projects.is_empty());
+        assert!(window.try_find("clear-recent").is_none());
+    })
+    .unwrap();
     panel.update(cx, |panel, cx| {
         assert!(panel.repository.is_none() && panel.load_task.is_none());
         panel.load_project(root, cx);
@@ -226,7 +234,7 @@ fn change_groups_scroll_together_with_visible_headers(cx: &mut TestAppContext) {
     repo.changes = (0..400)
         .map(|i| crate::git::ChangedFile {
             status: if i < 200 { " M" } else { "??" }.into(),
-            path: format!("file-{i}.txt"),
+            path: format!("file-{i}.txt").into(),
             original_path: None,
         })
         .collect();

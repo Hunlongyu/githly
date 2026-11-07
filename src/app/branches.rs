@@ -35,7 +35,10 @@ impl GitPanel {
                     }
                     Err(error) => this.tip(
                         "project",
-                        Some(Notification::error(format!("{error:#}"))),
+                        Some(notification(
+                            NotificationType::Error,
+                            LocalizedText::diagnostic(error),
+                        )),
                         cx,
                     ),
                 }
@@ -59,7 +62,13 @@ impl GitPanel {
         self.switching_branch = true;
         self.tip(
             "checkout",
-            Some(Notification::info(messages().switching_branch()).autohide(false)),
+            Some(
+                notification(
+                    NotificationType::Info,
+                    LocalizedText::new(Locale::switching_branch),
+                )
+                .autohide(false),
+            ),
             cx,
         );
         let path = root.clone();
@@ -82,7 +91,10 @@ impl GitPanel {
                         }
                         Err(error) => this.tip(
                             "checkout",
-                            Some(Notification::error(format!("{error:#}"))),
+                            Some(notification(
+                                NotificationType::Error,
+                                LocalizedText::diagnostic(error),
+                            )),
                             cx,
                         ),
                     }

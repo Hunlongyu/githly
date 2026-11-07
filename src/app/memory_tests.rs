@@ -103,7 +103,7 @@ fn closing_detail_drops_document_state_and_pending_requests(cx: &mut TestAppCont
             panel.detail_open = true;
             panel.selected_file = Some(0);
             panel.files = (0..360).map(|index| ChangedFile {
-                path: format!("src/file-{index}.cpp"), original_path: None, status: "M".into(),
+                path: format!("src/file-{index}.cpp").into(), original_path: None, status: "M".into(),
             }).collect();
             panel.diff.update(cx, |diff, cx| diff.set_files(diff_data::parse(
                 "diff --git a/QSpin_en.ts b/QSpin_en.ts\n--- a/QSpin_en.ts\n+++ b/QSpin_en.ts\n@@ -1 +1 @@\n-<translation>Old</translation>\n+<translation>New</translation>\n"

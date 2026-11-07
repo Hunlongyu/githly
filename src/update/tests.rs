@@ -1,5 +1,5 @@
 use super::*;
-use std::collections::VecDeque;
+use std::{collections::VecDeque, sync::Mutex};
 
 struct Reply {
     url: String,
@@ -8,21 +8,23 @@ struct Reply {
     broken: bool,
 }
 struct Mock {
-    replies: VecDeque<Reply>,
-    calls: Vec<String>,
+    replies: Mutex<VecDeque<Reply>>,
 }
 impl Mock {
-    fn new(replies: Vec<Reply>) -> Self {
-        Self {
-            replies: replies.into(),
-            calls: vec![],
-        }
+    fn new(replies: Vec<Reply>) -> Arc<Self> {
+        Arc::new(Self {
+            replies: Mutex::new(replies.into()),
+        })
     }
 }
 impl Fetch for Mock {
-    fn get(&mut self, url: &str, output: &mut dyn Write, limit: u64) -> Result<Response> {
-        self.calls.push(url.into());
-        let reply = self.replies.pop_front().expect("unexpected extra request");
+    fn get(&self, url: &str, output: &mut dyn Write, limit: u64) -> Result<Response> {
+        let reply = self
+            .replies
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("unexpected extra request");
         assert_eq!(reply.url, url);
         ensure!(reply.bytes.len() as u64 <= limit, "oversized");
         output.write_all(&reply.bytes)?;
@@ -46,7 +48,9 @@ fn release(version: &str) -> Reply {
     reply(
         API,
         200,
-        format!(r#"{{"tag_name":"v{version}","draft":false,"prerelease":false}}"#),
+        format!(
+            r#"{{"tag_name":"v{version}","draft":false,"prerelease":false,"created_at":"2026-01-01","assets":[]}}"#
+        ),
     )
 }
 fn checksum(content: &[u8]) -> String {
@@ -81,9 +85,9 @@ fn available(content: &[u8]) -> Available {
 
 #[test]
 fn no_update_never_downloads_a_manifest() {
-    let mut fetch = Mock::new(vec![release("0.1.0")]);
+    let fetch = Mock::new(vec![release("0.1.0")]);
     let result = check_with(
-        &mut fetch,
+        fetch.clone(),
         &mut Preferences::default(),
         "0.1.0",
         1000,
@@ -91,27 +95,68 @@ fn no_update_never_downloads_a_manifest() {
     )
     .unwrap();
     assert!(result.is_none());
-    assert_eq!(fetch.calls.len(), 1);
+    assert!(fetch.replies.lock().unwrap().is_empty());
 }
 
 #[test]
-fn github_asset_digest_and_notes_are_used_without_a_second_request() {
-    let expected = available(b"verified");
-    let installer = &expected.manifest.installer;
-    let body = serde_json::json!({"tag_name":"v0.2.0","draft":false,"prerelease":false,"body":"Fixes #20",
-        "assets":[{"browser_download_url":installer.url,"size":installer.size,"digest":format!("sha256:{}",installer.sha256)}]});
-    let mut fetch = Mock::new(vec![reply(API, 200, serde_json::to_vec(&body).unwrap())]);
-    let update = check_with(
-        &mut fetch,
-        &mut Preferences::default(),
-        "0.1.0",
-        1000,
-        Distribution::Native,
-    )
-    .unwrap()
-    .unwrap();
-    assert_eq!(update.manifest.notes, "Fixes #20");
-    assert_eq!(update.manifest.installer.sha256, installer.sha256);
+fn github_selects_the_exact_distribution_and_digest_in_one_request() {
+    let version = Version::parse("0.2.0").unwrap();
+    let packages = [
+        (Distribution::Native, b"native installer".as_slice()),
+        #[cfg(any(windows, target_os = "linux"))]
+        (Distribution::Portable, b"portable".as_slice()),
+    ];
+    let assets: Vec<_> = packages.iter().enumerate().map(|(index, (mode, bytes))| {
+        let installer = manifest(*mode, "0.2.0", bytes).installer;
+        serde_json::json!({
+            "name": mode.package_name(&version),
+            "url": format!("https://api.github.com/repos/Hunlongyu/githly/releases/assets/{index}"),
+            "browser_download_url": installer.url,
+            "size": installer.size,
+            "digest": format!("sha256:{}", installer.sha256),
+        })
+    }).collect();
+    let release = serde_json::json!({
+        "tag_name": "v0.2.0", "draft": false, "prerelease": false,
+        "body": "Fixes #20", "created_at": "2026-01-01T00:00:00Z", "assets": assets,
+    });
+    for (mode, content) in packages {
+        let fetch = Mock::new(vec![reply(API, 200, serde_json::to_vec(&release).unwrap())]);
+        let update = check_with(fetch, &mut Preferences::default(), "0.1.0", 1000, mode)
+            .unwrap()
+            .unwrap();
+        assert_eq!(update.distribution, mode);
+        assert_eq!(update.manifest.notes, "Fixes #20");
+        assert_eq!(update.manifest.installer.sha256, checksum(content));
+        assert_eq!(update.manifest.installer.size, content.len() as u64);
+        assert!(
+            update
+                .manifest
+                .installer
+                .url
+                .ends_with(&mode.package_name(&version))
+        );
+    }
+}
+
+#[test]
+fn draft_and_prerelease_responses_cannot_offer_a_stable_update() {
+    for flag in ["draft", "prerelease"] {
+        let mut latest = release("0.2.0");
+        let mut body: serde_json::Value = serde_json::from_slice(&latest.bytes).unwrap();
+        body[flag] = true.into();
+        latest.bytes = serde_json::to_vec(&body).unwrap();
+        assert!(
+            check_with(
+                Mock::new(vec![latest]),
+                &mut Preferences::default(),
+                "0.1.0",
+                1000,
+                Distribution::Native
+            )
+            .is_err()
+        );
+    }
 }
 
 #[test]
@@ -123,27 +168,61 @@ fn rate_limit_uses_official_manifest_and_preserves_server_cooldown() {
     );
     let bytes = serde_json::to_vec(&manifest(distribution, "0.2.0", b"package")).unwrap();
     let mut prefs = Preferences::default();
-    let mut fetch = Mock::new(vec![
+    let fetch = Mock::new(vec![
         reply(API, 429, vec![]),
         reply(&url, 200, bytes.clone()),
     ]);
-    let found = check_with(&mut fetch, &mut prefs, "0.1.0", 1000, distribution)
+    let found = check_with(fetch, &mut prefs, "0.1.0", 1000, distribution)
         .unwrap()
         .unwrap();
     assert_eq!(found.manifest.notes, "Release notes in the app");
     assert_eq!(prefs.api_retry_after, 1500);
-    let mut fetch = Mock::new(vec![reply(&url, 200, bytes)]);
-    check_with(&mut fetch, &mut prefs, "0.1.0", 1100, distribution).unwrap();
-    let mut failed = Mock::new(vec![reply(&url, 503, vec![])]);
-    assert!(check_with(&mut failed, &mut prefs, "0.1.0", 1200, distribution).is_err());
+    let fetch = Mock::new(vec![reply(&url, 200, bytes)]);
+    check_with(fetch, &mut prefs, "0.1.0", 1100, distribution).unwrap();
+    let failed = Mock::new(vec![reply(&url, 503, vec![])]);
+    assert!(check_with(failed, &mut prefs, "0.1.0", 1200, distribution).is_err());
     assert_eq!(prefs.api_retry_after, 1500);
+}
+
+#[test]
+fn incomplete_asset_metadata_uses_the_manifest_for_that_release() {
+    let mode = Distribution::Native;
+    let manifest = manifest(mode, "0.2.0", b"verified package");
+    let mut latest: serde_json::Value = serde_json::from_slice(&release("0.2.0").bytes).unwrap();
+    let asset = serde_json::json!({
+        "name": mode.package_name(&Version::parse("0.2.0").unwrap()),
+        "url": "https://api.github.com/repos/Hunlongyu/githly/releases/assets/1",
+        "browser_download_url": manifest.installer.url,
+        "size": manifest.installer.size,
+        "digest": format!("sha256:{}", manifest.installer.sha256),
+    });
+    for (field, incomplete) in [
+        ("size", serde_json::Value::Null),
+        ("digest", "sha256:".into()),
+    ] {
+        let mut incomplete_asset = asset.clone();
+        incomplete_asset[field] = incomplete;
+        latest["assets"] = serde_json::json!([incomplete_asset]);
+        let fetch = Mock::new(vec![
+            reply(API, 200, serde_json::to_vec(&latest).unwrap()),
+            reply(
+                format!("{RELEASES}/download/v0.2.0/{}", mode.manifest_name()),
+                200,
+                serde_json::to_vec(&manifest).unwrap(),
+            ),
+        ]);
+        let update = check_with(fetch, &mut Preferences::default(), "0.1.0", 1000, mode)
+            .unwrap()
+            .unwrap();
+        assert_eq!(update.manifest.installer.sha256, manifest.installer.sha256);
+    }
 }
 
 #[test]
 fn rejects_stale_manifest_for_known_release() {
     let mode = Distribution::Native;
     let url = format!("{RELEASES}/download/v0.2.0/{}", mode.manifest_name());
-    let mut fetch = Mock::new(vec![
+    let fetch = Mock::new(vec![
         release("0.2.0"),
         reply(
             &url,
@@ -151,7 +230,16 @@ fn rejects_stale_manifest_for_known_release() {
             serde_json::to_vec(&manifest(mode, "0.1.0", b"stale")).unwrap(),
         ),
     ]);
-    assert!(check_with(&mut fetch, &mut Preferences::default(), "0.1.0", 1000, mode).is_err());
+    assert!(
+        check_with(
+            fetch.clone(),
+            &mut Preferences::default(),
+            "0.1.0",
+            1000,
+            mode
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -160,7 +248,7 @@ fn downloads_retry_builtin_mirrors_with_verified_bytes_and_progress() {
     let content = b"test installer";
     let update = available(content);
     let direct = &update.manifest.installer.url;
-    let mut fetch = Mock::new(vec![
+    let fetch = Mock::new(vec![
         reply(direct, 503, vec![]),
         reply(
             format!("{}{direct}", MIRRORS[0]),
@@ -170,7 +258,7 @@ fn downloads_retry_builtin_mirrors_with_verified_bytes_and_progress() {
         reply(format!("{}{direct}", MIRRORS[1]), 200, content.to_vec()),
     ]);
     let received = AtomicU64::new(500);
-    let path = download_with(&mut fetch, &update, directory.path(), &received).unwrap();
+    let path = download_with(fetch.as_ref(), &update, directory.path(), &received).unwrap();
     assert_eq!(received.load(Ordering::Relaxed), content.len() as u64);
     assert_eq!(std::fs::read(path).unwrap(), content);
     assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
@@ -183,7 +271,7 @@ fn failed_downloads_leave_no_partial_file() {
     let direct = &update.manifest.installer.url;
     let mut broken = reply(direct, 200, b"exp".to_vec());
     broken.broken = true;
-    let mut fetch = Mock::new(vec![
+    let fetch = Mock::new(vec![
         broken,
         reply(
             format!("{}{direct}", MIRRORS[0]),
@@ -192,7 +280,15 @@ fn failed_downloads_leave_no_partial_file() {
         ),
         reply(format!("{}{direct}", MIRRORS[1]), 200, b"mismatch".to_vec()),
     ]);
-    assert!(download_with(&mut fetch, &update, directory.path(), &AtomicU64::new(0)).is_err());
+    assert!(
+        download_with(
+            fetch.as_ref(),
+            &update,
+            directory.path(),
+            &AtomicU64::new(0)
+        )
+        .is_err()
+    );
     assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
 }
 
