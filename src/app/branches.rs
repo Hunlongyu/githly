@@ -9,6 +9,7 @@ impl GitPanel {
         let Some(git) = self.git.clone() else { return };
         self.branch_open = false;
         self.refresh_task = None;
+        self.refresh_error = None;
         self.reset_history_reader(cx);
         self.project_generation = self.project_generation.wrapping_add(1);
         self.statistics_task = None;

@@ -14,9 +14,12 @@ pub fn layout(commits: &[Commit]) -> Vec<GraphRow> {
     extend(commits, &mut Vec::new())
 }
 
-pub fn extend(commits: &[Commit], lanes: &mut Vec<String>) -> Vec<GraphRow> {
+pub fn extend<'a>(
+    commits: impl IntoIterator<Item = &'a Commit>,
+    lanes: &mut Vec<String>,
+) -> Vec<GraphRow> {
     commits
-        .iter()
+        .into_iter()
         .map(|commit| {
             let incoming = lanes.len();
             let node = lanes

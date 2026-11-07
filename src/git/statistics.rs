@@ -89,37 +89,14 @@ impl Git {
         // Bound untracked-file I/O. Large/binary/remaining files keep an explicit
         // unavailable value; their line count is never reported as zero.
         let mut budget = 8 * 1024 * 1024_u64;
-        let mut read_count = 0;
         if commit.is_none() && scope != ChangeScope::Staged {
-            for file in changes.iter().filter(|file| file.status == "??") {
-                let path = root.join(&file.path);
-                let counts = if read_count < 256 {
-                    if let Ok(metadata) = std::fs::symlink_metadata(&path) {
-                        if metadata.is_file()
-                            && metadata.len() <= 1024 * 1024
-                            && metadata.len() <= budget
-                        {
-                            budget -= metadata.len();
-                            read_count += 1;
-                            // Cap the read as the file can grow after metadata.
-                            use std::io::Read;
-                            let mut bytes = Vec::new();
-                            let result = std::fs::File::open(path).and_then(|file| {
-                                file.take(1024 * 1024 + 1).read_to_end(&mut bytes)
-                            });
-                            if result.is_ok() && bytes.len() <= 1024 * 1024 && !bytes.contains(&0) {
-                                std::str::from_utf8(&bytes)
-                                    .ok()
-                                    .map(|text| (text.lines().count() as u64, 0))
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
+            for (index, file) in changes
+                .iter()
+                .filter(|file| file.status == "??")
+                .enumerate()
+            {
+                let counts = if index < 256 && budget > 0 {
+                    untracked_lines(&root.join(&file.path), &mut budget).map(|lines| (lines, 0))
                 } else {
                     None
                 };
@@ -128,4 +105,28 @@ impl Git {
         }
         Ok(stats)
     }
+}
+
+fn untracked_lines(path: &Path, budget: &mut u64) -> Option<u64> {
+    use std::io::Read;
+
+    const FILE_LIMIT: u64 = 1024 * 1024;
+    let metadata = std::fs::symlink_metadata(path).ok()?;
+    if !metadata.is_file() || metadata.len() > FILE_LIMIT.min(*budget) {
+        return None;
+    }
+    let mut file = std::fs::File::open(path).ok()?;
+    let limit = (FILE_LIMIT + 1).min(*budget);
+    let mut bytes = Vec::new();
+    let result = file.by_ref().take(limit).read_to_end(&mut bytes);
+    let size = bytes.len() as u64;
+    *budget -= size;
+    result.ok()?;
+    if size > FILE_LIMIT
+        || (size == limit && file.metadata().ok()?.len() > size)
+        || bytes.contains(&0)
+    {
+        return None;
+    }
+    Some(std::str::from_utf8(&bytes).ok()?.lines().count() as u64)
 }

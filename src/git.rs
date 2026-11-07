@@ -11,6 +11,7 @@ pub const IMAGE_FILE_LIMIT: u64 = 8 * 1024 * 1024;
 mod history;
 pub use history::{History, HistoryStream};
 mod stash;
+mod status;
 pub use stash::{Stash, StashDetail};
 mod statistics;
 pub use statistics::LineStatistics;
@@ -47,6 +48,7 @@ pub struct Commit {
 pub struct Repository {
     pub root: PathBuf,
     pub has_other_worktrees: bool,
+    pub worktree_error: Option<String>,
     git_dir: PathBuf,
     pub operation_states: Vec<String>,
     pub branch: String,
@@ -170,6 +172,21 @@ impl Git {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
+        self.run_with_stdout(root, args, |stdout| read_limited(stdout, 8 * 1024 * 1024))
+            .await
+    }
+
+    async fn run_with_stdout<I, S, T, F>(
+        &self,
+        root: Option<&Path>,
+        args: I,
+        read_stdout: impl FnOnce(async_process::ChildStdout) -> F,
+    ) -> Result<T>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+        F: Future<Output = Result<T>>,
+    {
         let mut command = std::process::Command::new(&self.executable);
         #[cfg(windows)]
         {
@@ -199,7 +216,7 @@ impl Git {
         let (status, stdout, stderr) = futures_lite::future::race(
             async {
                 let (stdout, stderr) = futures_lite::future::try_zip(
-                    read_limited(stdout, 8 * 1024 * 1024),
+                    read_stdout(stdout),
                     read_limited(stderr, 64 * 1024),
                 )
                 .await?;
@@ -259,20 +276,33 @@ impl Git {
     }
 
     pub async fn switch_branch(&self, root: &Path, name: &str) -> Result<()> {
-        let current = self.open(root, 1).await?;
+        let status = self
+            .run(
+                Some(root),
+                ["status", "--porcelain=v1", "-z", "--untracked-files=normal"],
+            )
+            .await?;
+        anyhow::ensure!(status.is_empty(), "工作区或暂存区存在更改，暂不能切换分支");
+        let git_dir = self.git_dir(root).await?;
         anyhow::ensure!(
-            current.changes.is_empty(),
-            "工作区或暂存区存在更改，暂不能切换分支"
-        );
-        anyhow::ensure!(
-            current.operation_states.is_empty(),
+            operation_states(&git_dir).is_empty(),
             "仓库正在进行其他操作，暂不能切换分支"
         );
+        let reference = format!("refs/heads/{name}");
+        let local = self
+            .run(
+                Some(root),
+                [
+                    "for-each-ref",
+                    "--count=1",
+                    "--format=%(refname)%00%(symref)",
+                    "--",
+                    &reference,
+                ],
+            )
+            .await?;
         anyhow::ensure!(
-            current
-                .branches
-                .iter()
-                .any(|branch| !branch.remote && branch.name == name),
+            local.strip_suffix(b"\0\n") == Some(reference.as_bytes()),
             "仅支持切换已有本地分支"
         );
         // Writes are not subject to the read timeout/cancellation policy.
@@ -284,7 +314,7 @@ impl Git {
         }
         command
             .current_dir(root)
-            .args(["switch", "--", name])
+            .args(["switch", "--no-guess", "--", name])
             .env("GIT_TERMINAL_PROMPT", "0");
         let mut command = async_process::Command::from(command);
         let mut child = command
@@ -307,6 +337,13 @@ impl Git {
         Ok(())
     }
 
+    async fn git_dir(&self, root: &Path) -> Result<PathBuf> {
+        let output = self
+            .run(Some(root), ["rev-parse", "--absolute-git-dir"])
+            .await?;
+        Ok(PathBuf::from(String::from_utf8_lossy(&output).trim()))
+    }
+
     async fn read_repository(
         &self,
         root: PathBuf,
@@ -317,18 +354,9 @@ impl Git {
         let git_dir = if let Some(previous) = previous {
             previous.git_dir.clone()
         } else {
-            PathBuf::from(
-                String::from_utf8_lossy(
-                    &self
-                        .run(Some(&root), ["rev-parse", "--absolute-git-dir"])
-                        .await?,
-                )
-                .trim(),
-            )
+            self.git_dir(&root).await?
         };
-        let branch = self.run(Some(&root), ["branch", "--show-current"]).await?;
-        let branch = String::from_utf8_lossy(&branch).trim().to_string();
-        let tracking = self
+        let status = self
             .run(
                 Some(&root),
                 [
@@ -337,20 +365,20 @@ impl Git {
                     "--branch",
                     "--ahead-behind",
                     "-z",
-                    "--untracked-files=no",
+                    "--untracked-files=all",
                 ],
             )
             .await?;
-        let status = self
-            .run(
-                Some(&root),
-                ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
-            )
-            .await?;
+        let status::Status {
+            head,
+            branch,
+            tracking,
+            changes,
+        } = status::parse(&status)?;
         // status distinguishes an unborn branch from a failed Git query.
         // Include tags and object IDs so external ref moves invalidate decorations.
-        let refs = self
-            .run(
+        let (refs, refs_digest) = self
+            .run_with_stdout(
                 Some(&root),
                 [
                     "for-each-ref",
@@ -359,20 +387,17 @@ impl Git {
                     "refs/remotes",
                     "refs/tags",
                 ],
+                read_refs,
             )
             .await?;
-        let head = tracking
-            .split(|b| *b == 0)
-            .find_map(|line| line.strip_prefix(b"# branch.oid "))
-            .context("Git 未返回 HEAD 状态")?;
         let history_scope = previous
             .map(|repo| repo.history_scope.clone())
             .unwrap_or_default();
         let mut roots = Vec::new();
         match &history_scope {
             HistoryScope::Head => {
-                if head != b"(initial)" {
-                    roots.push(std::str::from_utf8(head)?.to_string());
+                if let Some(head) = &head {
+                    roots.push(head.clone());
                 }
             }
             HistoryScope::Branch(reference) => {
@@ -393,16 +418,16 @@ impl Git {
                         roots.push(fields[3].to_string());
                     }
                 }
-                if head != b"(initial)" {
-                    roots.push(std::str::from_utf8(head)?.to_string());
+                if let Some(head) = &head {
+                    roots.push(head.clone());
                 }
                 roots.sort();
                 roots.dedup();
             }
         }
-        let mut history_key = head.to_vec();
+        let mut history_key = head.as_deref().unwrap_or_default().as_bytes().to_vec();
         history_key.push(0);
-        history_key.extend_from_slice(&refs);
+        history_key.extend_from_slice(&refs_digest);
         history_key.extend_from_slice(format!("{history_scope:?}").as_bytes());
         let history_pending =
             !update_history && previous.is_some_and(|repo| repo.history_key != history_key);
@@ -446,12 +471,20 @@ impl Git {
                 ],
             )
             .await?;
-        let branches = parse_branches(&refs).into();
+        let branches: Arc<[Branch]> = parse_branches(&refs).into();
+        let branch = if branch == "(detached)"
+            && head.is_some()
+            && !branches.iter().any(|branch| branch.current)
+        {
+            "分离 HEAD".into()
+        } else {
+            branch
+        };
         let graph = unchanged_history
             .map(|repo| repo.graph.clone())
             .unwrap_or_else(|| {
                 Arc::new(History::new(crate::graph::extend(
-                    &commits.iter().cloned().collect::<Vec<_>>(),
+                    commits.iter(),
                     &mut graph_lanes,
                 )))
             });
@@ -464,20 +497,7 @@ impl Git {
         let graph_width = unchanged_history
             .map(|repo| repo.graph_width)
             .unwrap_or_else(|| graph.iter().map(|row| row.width).max().unwrap_or(1));
-        let changes = parse_status(&status);
-        let mut operation_states = Vec::new();
-        for (marker, label) in [
-            ("MERGE_HEAD", "合并中"),
-            ("rebase-merge", "变基中"),
-            ("rebase-apply", "变基 / 应用补丁中"),
-            ("CHERRY_PICK_HEAD", "拣选中"),
-            ("REVERT_HEAD", "还原提交中"),
-            ("BISECT_LOG", "二分定位中"),
-        ] {
-            if git_dir.join(marker).exists() {
-                operation_states.push(label.to_string());
-            }
-        }
+        let mut operation_states = operation_states(&git_dir);
         let conflicts = changes
             .iter()
             .filter(|file| file.status.contains('U') || file.status == "AA" || file.status == "DD")
@@ -485,25 +505,29 @@ impl Git {
         if conflicts > 0 {
             operation_states.push(format!("{conflicts} 个冲突文件"));
         }
-        let has_other_worktrees = self.worktree_entries(&root).await.is_ok_and(|entries| {
-            entries
-                .iter()
-                .filter(|entry| entry.available)
-                .nth(1)
-                .is_some()
-        });
+        let (has_other_worktrees, worktree_error) = match self.worktree_entries(&root).await {
+            Ok(entries) => (
+                entries
+                    .iter()
+                    .filter(|entry| entry.available)
+                    .nth(1)
+                    .is_some(),
+                None,
+            ),
+            Err(error) => (
+                previous.is_some_and(|repo| repo.has_other_worktrees),
+                Some(format!("{error:#}")),
+            ),
+        };
         Ok(Repository {
             root,
             has_other_worktrees,
-            head: (head != b"(initial)").then(|| String::from_utf8_lossy(head).into_owned()),
+            worktree_error,
+            head,
             git_dir,
             operation_states,
-            tracking: parse_tracking(&tracking),
-            branch: if branch.is_empty() {
-                "分离 HEAD".into()
-            } else {
-                branch
-            },
+            tracking,
+            branch,
             changes,
             graph,
             commits,
@@ -757,6 +781,50 @@ async fn read_limited(reader: impl AsyncRead + Unpin, limit: u64) -> Result<Vec<
     Ok(bytes)
 }
 
+async fn read_refs(reader: impl AsyncRead + Unpin) -> Result<(Vec<u8>, [u8; 32])> {
+    use futures_lite::io::{AsyncBufReadExt, BufReader};
+    use sha2::{Digest, Sha256};
+
+    const LIMIT: usize = 8 * 1024 * 1024;
+    let mut reader = BufReader::new(reader);
+    let mut record = Vec::new();
+    let mut branches = Vec::new();
+    let mut digest = Sha256::new();
+    loop {
+        record.clear();
+        let count = (&mut reader)
+            .take(LIMIT as u64 + 1)
+            .read_until(b'\n', &mut record)
+            .await?;
+        if count == 0 {
+            break;
+        }
+        anyhow::ensure!(count <= LIMIT, "单条 Git 引用超过 8 MiB");
+        digest.update(&record);
+        // Tags affect log decorations, but never appear in the branch picker or roots.
+        if !record.starts_with(b"refs/tags/") {
+            anyhow::ensure!(branches.len() + count <= LIMIT, "Git 分支列表超过 8 MiB");
+            branches.extend_from_slice(&record);
+        }
+    }
+    Ok((branches, digest.finalize().into()))
+}
+
+fn operation_states(git_dir: &Path) -> Vec<String> {
+    [
+        ("MERGE_HEAD", "合并中"),
+        ("rebase-merge", "变基中"),
+        ("rebase-apply", "变基 / 应用补丁中"),
+        ("CHERRY_PICK_HEAD", "拣选中"),
+        ("REVERT_HEAD", "还原提交中"),
+        ("BISECT_LOG", "二分定位中"),
+    ]
+    .into_iter()
+    .filter(|(marker, _)| git_dir.join(marker).exists())
+    .map(|(_, label)| label.to_string())
+    .collect()
+}
+
 fn find_on_path() -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     std::env::split_paths(&path)
@@ -840,7 +908,10 @@ fn parse_branches(bytes: &[u8]) -> Vec<Branch> {
 fn parse_tracking(bytes: &[u8]) -> Option<BranchTracking> {
     let mut upstream = None;
     let mut counts = None;
-    for header in bytes.split(|b| *b == 0) {
+    for header in bytes
+        .split(|b| *b == 0)
+        .take_while(|line| line.starts_with(b"# "))
+    {
         let header = String::from_utf8_lossy(header);
         if let Some(value) = header.strip_prefix("# branch.upstream ") {
             upstream = Some(value.to_string());
@@ -877,6 +948,21 @@ mod tests {
     }
 
     use super::*;
+    #[test]
+    fn tags_beyond_eight_mib_still_invalidate_history() {
+        let branch = b"refs/heads/main\0\0*\0abc\n";
+        let tag = b"refs/tags/a-long-tag-name\0\0 \0abc\n";
+        let mut output = branch.to_vec();
+        output.extend(tag.repeat(8 * 1024 * 1024 / tag.len() + 1));
+        futures_lite::future::block_on(async {
+            let (kept, first) = read_refs(output.as_slice()).await.unwrap();
+            assert_eq!(kept, branch);
+            output.extend_from_slice(b"refs/tags/last\0\0 \0def\n");
+            let (kept, second) = read_refs(output.as_slice()).await.unwrap();
+            assert_eq!(kept, branch);
+            assert_ne!(first, second);
+        });
+    }
     #[test]
     fn tracking_counts_keep_push_pull_order_and_unknown_state() {
         assert_eq!(

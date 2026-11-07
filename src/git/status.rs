@@ -1,0 +1,118 @@
+use super::*;
+
+pub(super) struct Status {
+    pub head: Option<String>,
+    pub branch: String,
+    pub tracking: Option<BranchTracking>,
+    pub changes: Vec<ChangedFile>,
+}
+
+pub(super) fn parse(bytes: &[u8]) -> Result<Status> {
+    let mut records = bytes.split(|b| *b == 0).peekable();
+    let mut oid = None;
+    let mut branch = None;
+    while let Some(header) = records.next_if(|record| record.starts_with(b"# ")) {
+        if let Some(value) = header.strip_prefix(b"# branch.oid ") {
+            oid = Some(value);
+        } else if let Some(value) = header.strip_prefix(b"# branch.head ") {
+            branch = Some(String::from_utf8_lossy(value).into_owned());
+        }
+    }
+    let oid = oid.context("Git 未返回 HEAD 状态")?;
+    let branch = branch.context("Git 未返回分支名称")?;
+    let tracking = parse_tracking(bytes);
+    let mut changes = Vec::new();
+    while let Some(record) = records.next() {
+        if record.is_empty() {
+            continue;
+        }
+        if let Some(path) = record.strip_prefix(b"? ") {
+            changes.push(ChangedFile {
+                status: "??".into(),
+                path: String::from_utf8_lossy(path).into_owned(),
+                original_path: None,
+            });
+            continue;
+        }
+        // Porcelain v2 has a fixed field count per record type. The final
+        // field is a literal path, which can contain spaces and newlines.
+        let fields = match record[0] {
+            b'1' => 9,
+            b'2' => 10,
+            b'u' => 11,
+            _ => bail!("无法识别 Git 文件状态"),
+        };
+        let mut parts = record.splitn(fields, |b| *b == b' ');
+        let xy = parts
+            .nth(1)
+            .filter(|xy| xy.len() == 2)
+            .context("Git 文件状态不完整")?;
+        let path = parts.nth(fields - 3).context("Git 文件路径不完整")?;
+        let original_path = if record[0] == b'2' {
+            let original = records
+                .next()
+                .filter(|p| !p.is_empty())
+                .context("Git 重命名路径不完整")?;
+            Some(String::from_utf8_lossy(original).into_owned())
+        } else {
+            None
+        };
+        changes.push(ChangedFile {
+            status: std::str::from_utf8(xy)?.replace('.', " "),
+            path: String::from_utf8_lossy(path).into_owned(),
+            original_path,
+        });
+    }
+    Ok(Status {
+        head: (oid != b"(initial)").then(|| String::from_utf8_lossy(oid).into_owned()),
+        branch,
+        tracking,
+        changes,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn paths_including_rename_sources_cannot_be_mistaken_for_headers() {
+        let status = parse(
+            concat!(
+                "# branch.oid abc\0# branch.head main\0# branch.upstream origin/main\0",
+                "# branch.ab +3 -2\0",
+                "1 .M N... 100644 100644 100644 a b  leading space.txt\0",
+                "2 R. N... 100644 100644 100644 a b R100 new name.txt\0# branch.upstream fake\0",
+                "u UU N... 100644 100644 100644 100644 a b c 冲突.txt\0",
+                "? new\nfile.txt\0",
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(status.head.as_deref(), Some("abc"));
+        assert_eq!(status.branch, "main");
+        assert_eq!(
+            status.tracking.unwrap(),
+            BranchTracking {
+                upstream: "origin/main".into(),
+                counts: Some((3, 2)),
+            }
+        );
+        let files = status.changes;
+        assert_eq!(files.len(), 4);
+        assert_eq!(
+            (&*files[0].status, &*files[0].path),
+            (" M", " leading space.txt")
+        );
+        assert_eq!((&*files[1].status, &*files[1].path), ("R ", "new name.txt"));
+        assert_eq!(
+            files[1].original_path.as_deref(),
+            Some("# branch.upstream fake")
+        );
+        assert_eq!((&*files[2].status, &*files[2].path), ("UU", "冲突.txt"));
+        assert_eq!(
+            (&*files[3].status, &*files[3].path),
+            ("??", "new\nfile.txt")
+        );
+    }
+}

@@ -68,7 +68,6 @@ pub struct GitPanel {
     diff: Entity<DiffState>,
     image_diff: Option<image_diff::ImageDiff>,
     diff_message: String,
-    detail_title: String,
     commit_body: String,
     stash_revision: Option<String>,
     stash_untracked_paths: std::collections::HashSet<String>,
@@ -161,7 +160,6 @@ impl GitPanel {
             diff: cx.new(|cx| DiffState::new([], cx).with_mode(DiffMode::Split)),
             image_diff: None,
             diff_message: String::new(),
-            detail_title: String::new(),
             commit_body: String::new(),
             stash_revision: None,
             stash_untracked_paths: std::collections::HashSet::new(),
@@ -322,7 +320,6 @@ impl GitPanel {
         self.diff.update(cx, |diff, cx| diff.set_files([], cx));
         self.clear_image_diff(cx);
         self.diff_message.clear();
-        self.detail_title.clear();
         self.commit_body = String::new();
         self.stash_revision = None;
         self.stash_untracked_paths = std::collections::HashSet::new();
@@ -403,10 +400,6 @@ impl GitPanel {
         self.clear_detail(cx);
         self.selected_commit = Some(commit.clone());
         self.detail_open = true;
-        self.detail_title = format!(
-            "{}   ·   {}   {}   {}",
-            commit.subject, commit.short_id, commit.author, commit.date
-        );
         self.diff_message = "正在读取文件…".into();
         let generation = self.generation;
         let task = cx.background_spawn(async move {
@@ -448,7 +441,6 @@ impl GitPanel {
             return;
         };
         self.clear_detail(cx);
-        self.detail_title = "本地更改 · 相对 HEAD".into();
         self.detail_change_scope = self.change_scope;
         if self.change_scope == ChangeScope::Working {
             file.original_path = None;
@@ -894,6 +886,21 @@ impl Render for GitPanel {
                         .child(format!("自动刷新暂不可用，保留上次内容并稍后重试：{error}")),
                 )
             })
+            .when_some(
+                self.repository
+                    .as_ref()
+                    .and_then(|repo| repo.worktree_error.as_ref()),
+                |view, error| {
+                    view.child(
+                        div()
+                            .px_3()
+                            .py_1()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(format!("读取 worktree 列表失败，稍后自动重试：{error}")),
+                    )
+                },
+            )
             .when_some(self.config_error.clone(), |this, error| {
                 this.child(
                     div()

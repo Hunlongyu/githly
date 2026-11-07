@@ -121,7 +121,11 @@ pub fn listen(window: &Window, panel: WeakEntity<GitPanel>, cx: &mut App) -> Res
             bail!("无法接收重复启动请求");
         }
         if SetPropW(hwnd, WINDOW_MARKER, hwnd) == 0 {
-            return Err(io::Error::last_os_error()).context("无法标记主窗口");
+            let error = io::Error::last_os_error();
+            if RemoveWindowSubclass(hwnd, Some(receive), LAUNCH) != 0 {
+                drop(Box::from_raw(sender));
+            }
+            return Err(error).context("无法标记主窗口");
         }
     }
     let window = window.window_handle();

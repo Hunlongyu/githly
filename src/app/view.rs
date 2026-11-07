@@ -86,17 +86,20 @@ impl GitPanel {
             executor.timer(std::time::Duration::from_millis(150)).await;
             let indices = executor
                 .spawn(async move {
-                    repository
-                        .commits
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, c)| {
-                            c.subject.to_lowercase().contains(&query)
-                                || c.author.to_lowercase().contains(&query)
-                                || c.id.to_lowercase().contains(&query)
-                        })
-                        .map(|(index, _)| index)
-                        .collect()
+                    let mut indices = Vec::new();
+                    for (index, commit) in repository.commits.iter().enumerate() {
+                        if index > 0 && index % 256 == 0 {
+                            // Let a replaced search task stop before visiting more commits.
+                            futures_lite::future::yield_now().await;
+                        }
+                        if commit.id.contains(&query)
+                            || commit.subject.to_lowercase().contains(&query)
+                            || commit.author.to_lowercase().contains(&query)
+                        {
+                            indices.push(index);
+                        }
+                    }
+                    indices
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {

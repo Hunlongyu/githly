@@ -257,6 +257,27 @@ fn branch_browsing_is_read_only_and_checkout_rejects_dirty_worktree() {
         );
         assert_eq!(git.open(root, 46).await.unwrap().branch, "main");
         std::fs::remove_file(root.join("dirty.txt")).unwrap();
+        command(&git, root, &["tag", "tag-only"]);
+        command(&git, root, &["branch", "group/nested"]);
+        for name in ["tag-only", "group"] {
+            assert!(
+                git.switch_branch(root, name)
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("已有本地分支")
+            );
+        }
+        let marker = repo.git_dir.join("BISECT_LOG");
+        std::fs::write(&marker, "").unwrap();
+        assert!(
+            git.switch_branch(root, "side")
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("正在进行其他操作")
+        );
+        std::fs::remove_file(marker).unwrap();
         git.switch_branch(root, "side").await.unwrap();
         assert_eq!(git.open(root, 46).await.unwrap().branch, "side");
         command(
@@ -276,6 +297,32 @@ fn branch_browsing_is_read_only_and_checkout_rejects_dirty_worktree() {
         let body = git.commit_body(root, "HEAD").await.unwrap();
         assert!(body.contains("第一段\n\n第二段"));
     });
+}
+
+#[test]
+fn untracked_statistics_bound_metadata_checks_as_well_as_reads() {
+    let (directory, git) = fixture(1);
+    std::fs::write(directory.path().join("last.txt"), "last\n").unwrap();
+    let changes: Vec<_> = (0..=256)
+        .map(|i| ChangedFile {
+            // The first 256 files disappeared between status and statistics.
+            path: if i == 256 {
+                "last.txt".into()
+            } else {
+                format!("{i}.txt")
+            },
+            original_path: None,
+            status: "??".into(),
+        })
+        .collect();
+    let stats = futures_lite::future::block_on(git.line_statistics(
+        directory.path(),
+        None,
+        ChangeScope::Working,
+        &changes,
+    ))
+    .unwrap();
+    assert!(stats.incomplete && stats.files["last.txt"].is_none());
 }
 
 #[test]

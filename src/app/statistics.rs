@@ -25,8 +25,12 @@ impl GitPanel {
         self.statistics_error = None;
         self.statistics_read = Some(Instant::now());
         let task = cx.background_spawn(async move {
-            git.line_statistics(&repo.root, None, scope, &repo.changes)
-                .await
+            if repo.changes.iter().any(|file| scope.includes(file)) {
+                git.line_statistics(&repo.root, None, scope, &repo.changes)
+                    .await
+            } else {
+                Ok(Default::default())
+            }
         });
         self.statistics_task = Some(cx.spawn(async move |this, cx| {
             let result = task.await;
