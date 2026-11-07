@@ -26,13 +26,21 @@ impl GitPanel {
                 panel: parent.downgrade(),
             }
         });
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_dialog(cx, move |dialog, _, cx| {
             dialog
                 .title(
                     h_flex()
                         .gap(px(8.))
                         .child(Icon::new(IconName::Settings).size_4())
-                        .child(messages().settings()),
+                        .child(messages().settings())
+                        .child(
+                            div()
+                                .id("settings-app-version")
+                                .test_support()
+                                .text_size(px(12.))
+                                .text_color(cx.theme().muted_foreground)
+                                .child(concat!("Githly v", env!("CARGO_PKG_VERSION"))),
+                        ),
                 )
                 .w(px(600.))
                 .centered()
@@ -255,6 +263,7 @@ mod tests {
         cx.update_window(window, |_, window, cx| {
             panel.update(cx, |panel, cx| panel.open_settings(window, cx));
             window.render_frame(cx);
+            assert!(window.find("settings-app-version").visible());
             window.within("settings-language").click(2_usize, cx);
             assert_eq!(panel.read(cx).config.language, Language::English);
         })

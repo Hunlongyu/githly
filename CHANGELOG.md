@@ -1,5 +1,19 @@
 # 更新日志
 
+## v0.1.4 · 2026-11-07
+
+- 修复检测到新版后右上角的云下载按钮显示为空白的问题，一并补齐空 Stash 列表的图标。打开设置即可在标题旁查看正在运行的 Githly 版本。
+- Windows 安装版通过应用内更新完成升级后，安装向导会自动打开新版。Windows 便携 ZIP 和 Linux AppImage 会在原位置替换程序，再自动重启。
+- macOS 校验并替换应用包后自动重新打开。Ubuntu 安装版会请求系统授权，通过 APT 更新，并在确认新版已安装后重启。
+- 从 v0.1.3 或更早的便携版首次升级到本版时，文件替换后仍需手动重新打开一次。旧版 macOS 和 DEB 客户端也沿用原来的安装流程。
+
+**English**
+
+- The cloud download button is now visible when an update is available. The empty stash list icon is also included. Settings shows the running Githly version beside the title.
+- On Windows, Setup launches the new version after an in-app upgrade. The portable Windows ZIP and Linux AppImage update in place and restart automatically.
+- macOS reopens the updated application bundle after verification and replacement. Ubuntu requests system authorization for APT and restarts after confirming the installed version.
+- When upgrading a portable copy from v0.1.3 or earlier to this release, reopen it once after the file is replaced. Older macOS and DEB clients also use their previous installation flow.
+
 ## v0.1.3 · 2026-11-07
 
 - Linux x64 新增 AppImage 便携包，下载后赋予执行权限即可运行。应用内更新会替换原 AppImage，重启后使用新版。

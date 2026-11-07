@@ -1,8 +1,9 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
-use crate::i18n::messages;
+use crate::{app_assets::AppAssets, i18n::messages};
 
 mod app;
+mod app_assets;
 mod config;
 mod git;
 mod graph;
@@ -57,7 +58,7 @@ fn main() -> anyhow::Result<()> {
     else {
         return Ok(());
     };
-    application().with_assets(assets::Assets).run(move |cx| {
+    application().with_assets(AppAssets).run(move |cx| {
         init(cx);
         gpui_kit::component::set_locale(i18n::messages().tag());
         motion::init(config.motion, cx);

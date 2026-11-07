@@ -287,7 +287,15 @@ fn portable_upgrade_replaces_the_running_copy_in_its_own_directory() {
             distribution: mode,
         };
         assert_eq!(Distribution::current().unwrap(), mode);
-        install(&path, &available).unwrap();
+        let InstallOutcome::Restart(restart) = install(&path, &available).unwrap() else {
+            panic!("Portable installs must restart the replaced executable");
+        };
+        assert_eq!(
+            restart,
+            path.with_file_name("My portable Githly.exe")
+                .canonicalize()
+                .unwrap()
+        );
         return;
     }
     let dir = tempfile::tempdir().unwrap();

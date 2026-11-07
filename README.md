@@ -95,7 +95,7 @@ Githly runs a single window per user session. Launching it again focuses or rest
 
 Githly checks for updates at startup. When a newer version is available, a download icon appears in the upper-right corner. Click it to read the release notes, then choose **Download update** to see the progress bar. You can close the dialog and reopen it while the download continues.
 
-Windows installations update through Setup and get a desktop shortcut. A portable copy downloads the ZIP and replaces its executable in the same folder. Restart it to use the new version. On macOS and Linux, Githly opens the verified platform package. If a direct download fails, Githly tries its built-in mirrors and verifies the bytes against the size and SHA-256 supplied by GitHub.
+Click **Install update** and complete any system authorization prompt. Githly restarts automatically after installation. Windows installations use Setup. Portable Windows and Linux AppImage copies update in place. The macOS updater replaces the application bundle, and Ubuntu installations use APT. If a direct download fails, Githly tries its built-in mirrors and verifies the bytes against the size and SHA-256 supplied by GitHub.
 
 On macOS, use Command in place of Ctrl for Githly shortcuts.
 

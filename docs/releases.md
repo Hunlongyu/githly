@@ -9,7 +9,7 @@
 ```powershell
 cargo build --release --locked
 ./scripts/install-inno.ps1
-./scripts/package.ps1 -Tag v0.1.3
+./scripts/package.ps1 -Tag v0.1.4
 ```
 
 编译器脚本从官方不可变版本地址下载 Inno Setup 6.7.4，验证固定 SHA-256、Windows 签名及发布者，便携解压到 `target/tools`，不注册文件关联。也可使用 PATH 中已有的 Inno Setup 6。仅需要便携包时使用 `./scripts/package.ps1 -SkipInstaller`。
@@ -24,15 +24,15 @@ cargo build --release --locked
 
 确认版本和产物后，由维护者提交变更并推送对应版本标签。工作流使用 CHANGELOG.md 中对应版本的条目生成 Release 说明，并附上该标签的安装包和便携包下载入口。
 
-安装包最低 Windows 10，按用户安装到 `%LOCALAPPDATA%/Programs/Githly`，不要求管理员权限。升级关闭占用文件的应用前使用正常安装向导，不强行终止；完成后可启动新版。用户配置保留在 `%APPDATA%/githly`，卸载也不删除配置。安装和升级都会创建当前用户的桌面快捷方式。便携版使用独立 ZIP，应用更新时在原目录暂存并替换当前程序，关闭再打开后生效。
+安装包最低 Windows 10，按用户安装到 `%LOCALAPPDATA%/Programs/Githly`，不要求管理员权限。升级关闭占用文件的应用前使用正常安装向导，不强行终止；应用内发起的升级成功后由安装向导自动启动新版。用户配置保留在 `%APPDATA%/githly`，卸载也不删除配置。安装和升级都会创建当前用户的桌面快捷方式。便携版使用独立 ZIP，应用更新时在原目录暂存并替换当前程序，替换成功后自动重启到原路径。
 
 ## macOS 和 Linux 安装包
 
 `.github/workflows/desktop.yml` 在原生运行器上执行测试、Clippy、Release 构建、打包和启动检查。macOS 无 Metal 设备时验证应用签名、包结构及无窗口界面测试。普通分支构建按架构上传 DMG 和 Debian 测试包。发布稳定标签时，发布任务会等待各平台构建完成，核对清单后将安装包上传到 GitHub Release。
 
-在对应平台运行 `cargo build --release --locked` 后，可用 `bash scripts/package-unix.sh <platform>` 生成同样的包。平台标识为 `macos-arm64`、`macos-x64`、`linux-x64`。Windows x64 客户端继续读取 `update.json`；新平台读取 `update-<platform>.json`，校验版本、下载地址、字节数和 SHA-256，用户点击安装后由系统打开相应包。
+在对应平台运行 `cargo build --release --locked` 后，可用 `bash scripts/package-unix.sh <platform>` 生成同样的包。平台标识为 `macos-arm64`、`macos-x64`、`linux-x64`。Windows x64 客户端继续读取 `update.json`；新平台读取 `update-<platform>.json`，校验版本、下载地址、字节数和 SHA-256，用户点击安装后，macOS 从只读挂载的 DMG 校验并替换应用包，Ubuntu 通过系统授权运行 APT；安装成功后自动启动新版。
 
-从 v0.1.2 之后的正式版开始，Linux 下载栏同时提供 DEB 和 x86_64 AppImage。AppImage 的平台标识为 `linux-x64-appimage`。CI 在 Ubuntu 22.04 编译，校验固定版本的 linuxdeploy 和 AppImage runtime，并在 Ubuntu 及 Fedora 上启动同一个包。客户端使用 `update-linux-x64-appimage.json` 校验下载，在原文件所在目录完成替换，重启后使用新版本。
+从 v0.1.2 之后的正式版开始，Linux 下载栏同时提供 DEB 和 x86_64 AppImage。AppImage 的平台标识为 `linux-x64-appimage`。CI 在 Ubuntu 22.04 编译，校验固定版本的 linuxdeploy 和 AppImage runtime，并在 Ubuntu 及 Fedora 上启动同一个包。客户端使用 `update-linux-x64-appimage.json` 校验下载，在原文件所在目录完成替换，然后自动重启到新 AppImage。
 
 ## 客户端检查与镜像
 

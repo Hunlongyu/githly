@@ -28,7 +28,7 @@ Package: githly
 Version: $version
 Architecture: amd64
 Maintainer: Hunlongyu <Hunlongyu@users.noreply.github.com>
-Depends: ${libraries#shlibs:Depends=}, git, xdg-utils, libvulkan1, libxkbcommon-x11-0
+Depends: ${libraries#shlibs:Depends=}, git, xdg-utils, pkexec, libvulkan1, libxkbcommon-x11-0
 Recommends: mesa-vulkan-drivers, xdg-desktop-portal
 Description: Desktop Git repository browser
 EOF

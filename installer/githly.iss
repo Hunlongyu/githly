@@ -40,6 +40,20 @@ Name: "{autoprograms}\Githly"; Filename: "{app}\Githly.exe"
 Name: "{autodesktop}\Githly"; Filename: "{app}\Githly.exe"; WorkingDir: "{app}"
 
 [Run]
-Filename: "{app}\Githly.exe"; Description: "Launch Githly"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\Githly.exe"; WorkingDir: "{app}"; Flags: nowait runasoriginaluser; Check: IsAppUpdate
+Filename: "{app}\Githly.exe"; Description: "Launch Githly"; Flags: nowait postinstall skipifsilent; Check: not IsAppUpdate
 
 ; Configuration in Roaming AppData is deliberately retained on uninstall.
+
+[Code]
+function IsAppUpdate: Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 1 to ParamCount do
+    if CompareText(ParamStr(I), '/UPDATE') = 0 then begin
+      Result := True;
+      Exit;
+    end;
+end;

@@ -9,7 +9,6 @@ use std::time::Duration;
 pub(super) struct UpdateState {
     task: Option<Task<()>>,
     progress: Option<(u64, u64)>,
-    restart_required: bool,
     busy: bool,
     message: String,
     available: Option<update::Available>,
@@ -18,7 +17,21 @@ pub(super) struct UpdateState {
 
 impl UpdateState {
     pub(super) fn update_available(&self) -> bool {
-        self.available.is_some() && !self.restart_required
+        self.available.is_some()
+    }
+
+    fn finish_install(&mut self, result: anyhow::Result<update::InstallOutcome>, cx: &mut App) {
+        self.busy = false;
+        self.message = match result {
+            Ok(update::InstallOutcome::Restart(path)) => {
+                cx.set_restart_path(path);
+                cx.restart();
+                messages().restarting().into()
+            }
+            #[cfg(windows)]
+            Ok(update::InstallOutcome::InstallerStarted) => messages().installer_opened().into(),
+            Err(error) => messages().install_failed(error),
+        };
     }
 }
 
@@ -34,7 +47,7 @@ impl Render for UpdateActions {
 
 impl GitPanel {
     pub(super) fn check_update(&mut self, cx: &mut Context<Self>) {
-        if self.updates.busy || self.updates.restart_required {
+        if self.updates.busy {
             return;
         }
         self.updates.busy = true;
@@ -130,22 +143,11 @@ impl GitPanel {
         };
         self.updates.busy = true;
         self.updates.message = messages().opening_installer().into();
-        #[cfg(any(windows, target_os = "linux"))]
-        let portable = available.distribution == update::Distribution::Portable;
         let task = cx.background_spawn(async move { update::install(&path, &available) });
         self.updates.task = Some(cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
-                this.updates.busy = false;
-                this.updates.message = match result {
-                    #[cfg(any(windows, target_os = "linux"))]
-                    Ok(()) if portable => {
-                        this.updates.restart_required = true;
-                        messages().portable_updated().into()
-                    }
-                    Ok(()) => messages().installer_opened().into(),
-                    Err(error) => messages().install_failed(error),
-                };
+                this.updates.finish_install(result, cx);
                 cx.notify();
             });
         }));
@@ -245,6 +247,26 @@ mod tests {
     use crate::update::{Available, Distribution, Installer, Manifest};
     use gpui_kit::component::WindowExt;
     use gpui_kit::{AppContext, TestAppContext, WindowOptions, test::TestWindowExt};
+
+    #[gpui_kit::test]
+    async fn only_a_completed_install_restarts_the_selected_copy(cx: &mut TestAppContext) {
+        let mut updates = super::UpdateState::default();
+        let mut restart = cx.expect_restart();
+        cx.update(|cx| updates.finish_install(Err(anyhow::anyhow!("cancelled")), cx));
+        assert!(restart.try_recv().unwrap().is_none());
+        #[cfg(windows)]
+        {
+            cx.update(|cx| {
+                updates.finish_install(Ok(super::update::InstallOutcome::InstallerStarted), cx)
+            });
+            assert!(restart.try_recv().unwrap().is_none());
+        }
+        let path = std::path::PathBuf::from("portable copy/Githly");
+        cx.update(|cx| {
+            updates.finish_install(Ok(super::update::InstallOutcome::Restart(path.clone())), cx)
+        });
+        assert_eq!(restart.await.unwrap().0, Some(path));
+    }
 
     #[gpui_kit::test]
     fn update_icon_opens_notes_and_download_progress_in_the_same_dialog(cx: &mut TestAppContext) {

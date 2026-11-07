@@ -19,6 +19,8 @@ mod http;
 use http::Http;
 #[cfg(target_os = "linux")]
 mod appimage;
+#[cfg(target_os = "macos")]
+mod macos;
 #[cfg(windows)]
 mod portable;
 #[cfg(test)]
@@ -413,7 +415,13 @@ fn verify_reader(file: &mut File, installer: &Installer) -> Result<()> {
     Ok(())
 }
 
-pub fn install(path: &Path, available: &Available) -> Result<()> {
+pub enum InstallOutcome {
+    Restart(PathBuf),
+    #[cfg(windows)]
+    InstallerStarted,
+}
+
+pub fn install(path: &Path, available: &Available) -> Result<InstallOutcome> {
     let distribution = Distribution::current()?;
     ensure!(
         distribution == available.distribution,
@@ -422,27 +430,45 @@ pub fn install(path: &Path, available: &Available) -> Result<()> {
     validate(&available.manifest, distribution)?;
     #[cfg(windows)]
     if distribution == Distribution::Portable {
-        return portable::apply(path, &available.manifest.installer);
+        return portable::apply(path, &available.manifest.installer).map(InstallOutcome::Restart);
     }
     #[cfg(target_os = "linux")]
     if distribution == Distribution::Portable {
         let image = appimage::current_path()?.context(messages().invalid_installer_url())?;
-        return appimage::replace(&image, path, &available.manifest.installer);
+        appimage::replace(&image, path, &available.manifest.installer)?;
+        return Ok(InstallOutcome::Restart(image));
     }
     verify_file(path, &available.manifest.installer)?;
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     {
-        let opener = if cfg!(target_os = "macos") {
-            "open"
-        } else {
-            "xdg-open"
-        };
-        let status = std::process::Command::new(opener)
+        // Wait for the package transaction, including the desktop authorization
+        // prompt. Opening a .deb in a viewer does not confirm it was installed.
+        let output = std::process::Command::new("/usr/bin/pkexec")
+            .args(["/usr/bin/apt-get", "--yes", "--no-remove", "install"])
             .arg(path)
-            .status()
+            .output()
             .context(messages().installer_launch_failed())?;
-        ensure!(status.success(), messages().installer_launch_failed());
-        Ok(())
+        ensure!(
+            output.status.success(),
+            "apt ({}): {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+        let installed = std::process::Command::new("/usr/bin/dpkg-query")
+            .args(["-W", "-f=${Status} ${Version}", "githly"])
+            .output()?;
+        ensure!(
+            installed.status.success()
+                && installed.stdout
+                    == format!("install ok installed {}", available.manifest.version).as_bytes(),
+            "dpkg did not confirm installation of Githly {}",
+            available.manifest.version
+        );
+        Ok(InstallOutcome::Restart("/usr/bin/githly".into()))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        macos::install(path, &available.manifest.version).map(InstallOutcome::Restart)
     }
     #[cfg(windows)]
     {
@@ -456,6 +482,6 @@ pub fn install(path: &Path, available: &Available) -> Result<()> {
         command
             .spawn()
             .context(messages().installer_launch_failed())?;
-        Ok(())
+        Ok(InstallOutcome::InstallerStarted)
     }
 }

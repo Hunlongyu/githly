@@ -30,7 +30,7 @@ pub(super) fn is_installed(exe: &Path) -> Result<bool> {
     }
 }
 
-pub(super) fn apply(archive: &Path, package: &Installer) -> Result<()> {
+pub(super) fn apply(archive: &Path, package: &Installer) -> Result<PathBuf> {
     let exe = std::env::current_exe()?.canonicalize()?;
     let directory = exe.parent().context(messages().invalid_installer_url())?;
     let mut file = File::open(archive)?;
@@ -75,5 +75,5 @@ pub(super) fn apply(archive: &Path, package: &Installer) -> Result<()> {
     if let Err(error) = self_replace::self_delete_at(&old) {
         tracing::warn!("Portable update cleanup: {error}");
     }
-    Ok(())
+    Ok(exe)
 }

@@ -136,6 +136,7 @@ messages! {
     installer_in_use => "旧安装包正在使用，请稍后重试", "The previous installer is in use. Try again later.";
     installer_incomplete => "安装包不完整或大小不匹配", "Installer is incomplete or its size does not match";
     checksum_failed => "安装包 SHA-256 校验失败", "Installer SHA-256 verification failed";
+    #[cfg(any(windows, target_os = "linux"))]
     installer_launch_failed => "无法启动安装程序，当前版本仍可使用", "Could not start the installer. You can keep using the current version.";
     search_branches => "搜索分支", "Search branches";
     remote_branches => "远程分支", "Remote branches";
@@ -173,12 +174,12 @@ messages! {
     downloading => "正在下载更新包…", "Downloading update…";
     download_verified => "更新包已下载并通过校验。", "Update downloaded and verified.";
     opening_installer => "正在校验并应用更新…", "Verifying and applying the update…";
-    installer_opened => "安装程序已打开；完成后可重新启动 Githly。", "Installer opened. Restart Githly after installation.";
+    #[cfg(windows)]
+    installer_opened => "安装向导已打开，更新完成后会自动启动新版 Githly。", "The installer is open. Githly will restart after the update.";
     notes_unavailable => "此版本未提供更新说明。", "No release notes are available for this version.";
     #[cfg(windows)]
     invalid_portable_zip => "便携包缺少有效的 Githly.exe。", "The portable ZIP does not contain a valid Githly.exe.";
-    #[cfg(any(windows, target_os = "linux"))]
-    portable_updated => "便携版已在原目录更新。重新启动 Githly 即可使用新版本。", "The portable copy has been updated in place. Restart Githly to use the new version.";
+    restarting => "更新已安装，正在重新启动 Githly…", "Update installed. Restarting Githly…";
     release_notes => "更新日志", "Release notes";
     install_update => "安装更新…", "Install update…";
     download_update => "下载更新", "Download update";
@@ -270,7 +271,7 @@ formatted_messages! {
     image_preview_failed(error) => "无法预览图片：{error:#}", "Could not preview image: {error:#}";
     draw_image_failed(error) => "图片预览绘制失败：{error}", "Could not draw image preview: {error}";
     download_failed(error) => "下载失败：{error:#}", "Download failed: {error:#}";
-    install_failed(error) => "安装未启动：{error:#}；当前版本可继续使用", "Installer did not start: {error:#}. You can keep using this version.";
+    install_failed(error) => "更新失败：{error:#}", "Update failed: {error:#}";
     file_group(heading, count, state) => "{heading}，{count} 个文件，{state}", "{heading}, files: {count}, {state}";
     changes_tab(count) => "更改  {count}", "Changes  {count}";
     history_scope(scope) => "历史 · {scope}", "History · {scope}";
