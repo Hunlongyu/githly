@@ -18,10 +18,10 @@ try {
     $stage = Join-Path $projectRoot "target\package-$version"
     New-Item -ItemType Directory -Path $output, $stage -Force | Out-Null
     Copy-Item -LiteralPath $Executable -Destination (Join-Path $stage 'Githly.exe') -Force
-    Copy-Item -LiteralPath 'README.md' -Destination $stage -Force
+    Copy-Item -LiteralPath 'README.md', 'README.zh-CN.md' -Destination $stage -Force
     Copy-Item -LiteralPath 'vendor\gpui-component\LICENSE-APACHE' -Destination (Join-Path $stage 'GPUI-Component-LICENSE.txt') -Force
     $zipName = "Githly-$version-windows-x64.zip"
-    Compress-Archive -LiteralPath (Join-Path $stage 'Githly.exe'), (Join-Path $stage 'README.md'), (Join-Path $stage 'GPUI-Component-LICENSE.txt') -DestinationPath (Join-Path $output $zipName) -Force
+    Compress-Archive -LiteralPath (Join-Path $stage 'Githly.exe'), (Join-Path $stage 'README.md'), (Join-Path $stage 'README.zh-CN.md'), (Join-Path $stage 'GPUI-Component-LICENSE.txt') -DestinationPath (Join-Path $output $zipName) -Force
     $files = @((Join-Path $output $zipName))
     if (-not $SkipInstaller) {
         $compiler = Get-Command ISCC.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -First 1

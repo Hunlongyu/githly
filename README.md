@@ -1,86 +1,140 @@
-<p align="center">
-  <img src="assets/branding/githly-256.png" width="80" alt="Githly 图标" />
-</p>
-<h1 align="center">Githly</h1>
-<p align="center">面向 AI 开发流程的 Windows 原生 Git 观察面板</p>
-<p align="center">
-  <a href="https://github.com/Hunlongyu/githly/releases"><img src="https://img.shields.io/github/downloads/Hunlongyu/githly/total?style=flat-square" alt="GitHub Release 资产累计下载次数" /></a>
-</p>
+<div align="center">
+  <img src="assets/branding/githly-256.png" width="88" alt="Githly Logo" />
+  <h1>Githly</h1>
+  <p><strong>A Native Windows Git Companion for AI-Driven Development Workflows</strong></p>
 
-当 AI 或其他工具在后台修改代码、创建提交时，Githly 会自动刷新本地仓库状态。你可以在同一窗口看到哪些文件变了、工作区和暂存区各改了什么，也可以沿分支图找到一次提交，查看它的文件差异。
+  <p>
+    <a href="https://github.com/Hunlongyu/githly/releases/latest"><img src="https://img.shields.io/github/v/release/Hunlongyu/githly?style=flat-square&label=Release&color=2d7d9a" alt="Latest Release" /></a>
+    <a href="https://github.com/Hunlongyu/githly/actions/workflows/windows.yml"><img src="https://img.shields.io/github/actions/workflow/status/Hunlongyu/githly/windows.yml?style=flat-square&label=Windows%20Build" alt="Windows Build Status" /></a>
+    <a href="https://github.com/Hunlongyu/githly/releases"><img src="https://img.shields.io/github/downloads/Hunlongyu/githly/total?style=flat-square&label=Downloads&color=67b7d1" alt="Total Downloads" /></a>
+    <img src="https://img.shields.io/badge/Platform-Windows%2010%2F11%20(x64)-0078D4?style=flat-square" alt="Platform Windows 10/11 x64" />
+    <img src="https://img.shields.io/badge/Built%20with-Rust%20%2B%20GPUI-dea584?style=flat-square" alt="Built with Rust and GPUI" />
+  </p>
 
-## 下载与运行
+  <p>
+    <strong>English</strong> · <a href="README.zh-CN.md">简体中文</a>
+  </p>
 
-需要 **Windows 10 或 11（x64）** 和系统 Git。若 Githly 未找到 Git，可在设置中指定已有的 `git.exe`。
+  <p>
+    <a href="#highlights">Highlights</a> ·
+    <a href="#preview">Preview</a> ·
+    <a href="#download--installation">Download</a> ·
+    <a href="#quick-start">Quick Start</a> ·
+    <a href="#feature-guide">Feature Guide</a> ·
+    <a href="#keyboard-shortcuts">Shortcuts</a> ·
+    <a href="#build-from-source">Build</a>
+  </p>
+</div>
 
-从正式发布页选择 Windows x64 安装包或便携 ZIP。每个版本都附有更新说明和 `SHA256SUMS.txt`，可用来核对下载文件。[下载最新正式版](https://github.com/Hunlongyu/githly/releases/latest)
+---
 
-| 使用方式 | 如何启动 |
-| --- | --- |
-| 安装版 | 运行文件名以 `-windows-x64-setup.exe` 结尾的安装包，跟随向导为当前用户安装，之后从开始菜单打开 Githly。 |
-| 便携版 | 解压文件名以 `-windows-x64.zip` 结尾的便携包，直接运行其中的 `Githly.exe`。 |
+**Githly** is a fast, read-focused native Windows Git observation panel designed for modern AI-assisted coding workflows. When AI agents, CLI tools, or external editors modify files and create commits in the background, Githly automatically refreshes your local repository state—letting you inspect working tree changes, staged diffs, commit graphs, stashes, and worktrees in a single window without interrupting your tools.
 
-如需试用开发版，可登录 GitHub，在成功构建的 **Artifacts** 区域下载 `windows-x64`。开发构建保留 14 天。[Windows 构建列表](https://github.com/Hunlongyu/githly/actions/workflows/windows.yml)
+## Preview
 
-## 第一次使用
-
-同一 Windows 登录会话只运行一个 Githly 窗口。再次启动会唤回已有窗口，已最小化时会恢复。启动时传入仓库目录，会在该窗口打开对应项目。
-
-1. 把已有的本地仓库目录拖进窗口，或按 `Ctrl+O` 选取目录。用过的仓库可以从「最近打开」中直接进入。
-2. 在左侧「更改」面板切换「全部」「未暂存」「已暂存」，点击文件查看差异。同一文件既有已暂存又有未暂存修改时，可分别查看两部分。
-3. 在右侧点击一次提交，下方会打开它的第一个变更文件。点击其他文件可切换差异，用「上一处变化」「下一处变化」在修改位置之间跳转。
-4. 点击顶部分支名可浏览其他分支的历史。要改变工作目录的检出分支，请使用已有本地分支旁的「切换」按钮。切换要求工作区干净且没有冲突或进行中的合并、变基。
-
-## 界面预览
-
-![Githly 深色主题，左侧为文件更改，右侧为提交历史和双栏差异](docs/screenshots/native-dark.png)
+![Githly Dark Theme — File changes on the left, commit history and side-by-side diff on the right](docs/screenshots/native-dark.png)
 
 <details>
-<summary>查看浅色主题</summary>
+<summary><strong>View Light Theme</strong></summary>
+<br />
 
-![Githly 浅色主题，显示同一仓库的历史和双栏差异](docs/screenshots/native-light.png)
+![Githly Light Theme — Commit history and side-by-side diff](docs/screenshots/native-light.png)
 
 </details>
 
-## 查看仓库
+## Highlights
 
-| 想了解什么 | 在 Githly 中怎么看 |
+- **Built for AI & CLI Workflows** — Automatically refreshes local status (~15s in the foreground, ~60s in the background) without locking your repository or interfering with ongoing Git operations.
+- **Reading Position Preservation** — Open diffs keep their snapshot and scroll position while background changes happen. When browsing older history, Githly notifies you of new commits without jumping your viewport.
+- **Side-by-Side Text & Image Diffs** — Inspect unstaged and staged modifications separately or together, jump between hunks, and preview before/after image changes (`PNG`, `JPEG`, `GIF`, `WebP`, `BMP`, `ICO`, `TIFF`, `SVG`).
+- **Streaming Commit Graph** — Explore commit history with an interactive branch graph or flat list across the current branch, a specific branch, or all branches, streaming batches on demand as you scroll.
+- **Stash & Worktree Inspector** — Browse saved stashes (including untracked files) and inspect or switch between active Git worktrees directly from the top bar.
+- **Native Rust + GPUI Performance** — Uses your system `git.exe` asynchronously with strict memory budgets and viewport virtualization.
+
+## Download & Installation
+
+Requires **Windows 10 or 11 (x64)** and system **Git**. If Git is not detected automatically in `PATH`, you can specify an existing `git.exe` path in Settings (`Ctrl+,`).
+
+Download the latest installer or portable archive from **[GitHub Releases](https://github.com/Hunlongyu/githly/releases/latest)**. Every release includes changelog notes and `SHA256SUMS.txt` for checksum verification.
+
+| Edition | Artifact | How to Run |
+| --- | --- | --- |
+| **Installer** *(Recommended)* | `*-windows-x64-setup.exe` | Run the installer to install Githly for the current user (no admin rights required), then launch **Githly** from the Start Menu. |
+| **Portable ZIP** | `*-windows-x64.zip` | Extract the archive to any folder and run `Githly.exe` directly. |
+
+> **Development Builds:** To try the latest main-branch build, sign in to GitHub and download the `windows-x64` artifact from a completed run on the **[Windows Build Workflow](https://github.com/Hunlongyu/githly/actions/workflows/windows.yml)** page (retained for 14 days).
+
+## Quick Start
+
+Githly runs a single window per Windows user session. Launching it again focuses or restores the existing window, and passing a repository path as a CLI argument opens that project directly in the active window.
+
+1. **Open a Repository** — Drag and drop a local Git folder into the window, press `Ctrl+O` to browse, or pick a project from **Recent Repositories**.
+2. **Inspect Working Changes** — Switch between **All**, **Unstaged**, and **Staged** in the left **Changes** panel, and click any file to view its diff. Files with both staged and unstaged edits can be inspected separately.
+3. **Explore Commit History** — Click any commit on the right to open its first changed file below. Switch files in the commit file list and use **Previous Change** / **Next Change** to jump across diff hunks.
+4. **Browse & Switch Branches** — Click the branch selector in the top bar (`Ctrl+B`) to inspect the history of any local or remote-tracking branch. To check out a different local branch in your working directory, click **Switch** next to an existing local branch (requires a clean working tree with no active merge or rebase).
+
+## Feature Guide
+
+| What You Want to Know | How Githly Shows It |
 | --- | --- |
-| 改动有多大 | 「更改」按已跟踪和未跟踪文件分组，支持路径筛选，显示文件及合计增删行数。 |
-| 分支如何分叉、合并 | 历史可切换关系图和列表，支持当前分支、指定分支或全部分支。当前源码首批读取约两屏，滚动到距末尾约半屏时再加载最多 100 条。搜索范围是已加载的提交。 |
-| 分支与上游相差多少 | 查看领先、落后提交数。远程跟踪分支及这些计数来自本地引用，外部工具 Fetch 后面板会自动刷新。 |
-| 仓库在阅读期间又有了修改 | 前台约每 15 秒核对本地状态，后台约每 60 秒核对一次。浏览较早历史时会提示有新提交，回到顶部即可更新。已打开的差异保留阅读位置，重新选择文件可查看最新内容。 |
-| 一次提交具体改了什么 | 查看提交正文和逐文件双栏文本差异。常见图片可并排预览修改前后版本，GIF 和 WebP 显示首帧。 |
-| Stash 和其他工作目录里有什么 | 「Stash」可查看保存的文件及差异，包括当时保存的未跟踪文件。顶栏的 worktree 菜单可查看其他工作目录的路径、分支和更改状态，并打开对应目录。 |
+| **How much has changed?** | The **Changes** panel groups tracked and untracked files, supports path filtering, and asynchronously computes per-file and total added/deleted line counts. |
+| **How do branches diverge and merge?** | Toggle between the **Commit Graph** and **List** views across the current branch, a selected branch, or all branches. History loads ~2 screens initially and streams up to 100 commits per batch as you scroll near the bottom. Search filters loaded commits. |
+| **How far ahead or behind is my branch?** | View ahead/behind commit counts relative to upstream. Remote-tracking branches and counts reflect local refs and update automatically after you run `git fetch` in your terminal or IDE. |
+| **Did files change while I was reading?** | Githly checks local state every ~15s in the foreground and ~60s in the background. When viewing older commits, a banner alerts you to new commits until you return to the top. Open diffs preserve your reading position; reselect a file to reload its latest contents. |
+| **What exactly changed in a commit?** | Read the full commit message and side-by-side monospace text diffs with line numbers and change highlighting. Supported image formats are previewed side by side (`GIF` and `WebP` render their first frame). |
+| **What is inside Stashes and Worktrees?** | The **Stash** view shows saved files and diffs, including untracked files captured in the stash. The top-bar **Worktree** menu lists paths, branches, and dirty states across linked worktrees and lets you open any worktree directly. |
 
-提交、暂存、推送、拉取和解决冲突等操作请使用 Git 或已有开发工具。Githly 会在下一次自动刷新时显示结果。
+> **Scope by Design:** Staging, committing, pushing, pulling, fetching, and conflict resolution are intentionally left to your Git CLI, IDE, or AI coding agent. Githly stays strictly read-only (aside from explicit clean-tree local branch switching) so it never conflicts with your workflow, and reflects changes on the next automatic refresh.
 
-## 软件更新
+## Software Updates
 
-按 `Ctrl+,` 打开设置，在「软件更新」中可以立即检查，也可选择每天（默认）、每三天、每周或仅手动检查。更新来源是 GitHub 正式 Release。
+Press `Ctrl+,` to open **Settings → Software Update**. You can check for updates immediately or configure automatic checks **Daily** (default), **Every 3 Days**, **Weekly**, or **Manual Only**. Updates are fetched from official GitHub Releases.
 
-发现新版后，点击「更新说明」查看变化，或点击「下载更新」。客户端核对安装包大小和 SHA-256 后会显示「安装更新…」，点击后启动 Windows 安装向导。便携版用户若想保留解压运行的方式，可从发布页下载新版 ZIP。设置中也可配置 GitHub 限流时使用的 HTTPS 镜像。[发布与更新说明](docs/releases.md)
+When a new release is available:
+- Click **Release Notes** to review changes, or click **Download Update**.
+- After verifying the installer size and `SHA-256` digest, Githly displays **Install Update…** to launch the Windows setup wizard.
+- Portable ZIP users who prefer keeping a standalone folder can download the latest `.zip` directly from the release page.
+- If GitHub API rate limits apply on your network, you can configure a trusted HTTPS Release Mirror prefix in Settings. See **[Release & Update Documentation](docs/releases.md)** for details.
 
-## 快捷键与数据位置
+## Keyboard Shortcuts
 
-| 操作 | 快捷键 |
+| Action | Shortcut |
 | --- | --- |
-| 打开本地仓库 | `Ctrl+O` |
-| 搜索已加载的提交 | `Ctrl+F` |
-| 打开分支菜单 | `Ctrl+B` |
-| 在已聚焦的历史或文件列表中选择 | `↑` / `↓`，`Home` / `End` |
-| 打开设置 / 关闭弹层 | `Ctrl+,` / `Esc` |
+| Open local repository | `Ctrl+O` |
+| Search loaded commits | `Ctrl+F` |
+| Open branch selector | `Ctrl+B` |
+| Navigate focused commit or file list | `↑` / `↓`, `Home` / `End` |
+| Open Settings / Close dialog or popover | `Ctrl+,` / `Esc` |
 
-最近项目、主题、面板尺寸、Git 路径和更新偏好保存在 `%APPDATA%\githly\config.json`。遇到读取或更新错误时，可在 `%LOCALAPPDATA%\githly\logs` 查看日志。
+### Configuration & Logs
 
-## 从源码运行
+- **Configuration:** `%APPDATA%\githly\config.json` (stores recent repositories, theme, panel dimensions, custom Git path, and update preferences).
+- **Application Logs:** `%LOCALAPPDATA%\githly\logs` (records warnings and operational errors for troubleshooting).
 
-准备 Rust MSVC 工具链、Visual Studio C++ Build Tools、Windows SDK 和 CMake。仓库通过 `rust-toolchain.toml` 固定 Rust 版本。
+## Build from Source
+
+### Prerequisites
+
+- **Rust MSVC Toolchain** (pinned automatically via `rust-toolchain.toml`)
+- **Visual Studio C++ Build Tools** & **Windows SDK**
+- **CMake**
+
+### Run & Test
 
 ```powershell
 git clone https://github.com/Hunlongyu/githly.git
 cd githly
+
+# Build and launch Githly
 cargo run --locked
+
+# Or open a specific repository directly
+cargo run --locked -- "E:\path\to\repository"
 ```
 
-在已有源码目录中，可用 `cargo run --locked -- "E:\path\to\repository"` 直接打开指定仓库。实现进度、测试与打包步骤见[原生开发进度](docs/native-development.md)、[开发清单](TODO.md)和[发布文档](docs/releases.md)。
+### Project Documentation
+
+- **[Native Development Notes](docs/native-development.md)** — Architecture, memory boundaries, streaming history design, and verification benchmarks.
+- **[Release & Update Guide](docs/releases.md)** — Packaging scripts, Inno Setup installer build, update manifest format, and mirror rules.
+- **[Development Checklist (TODO)](TODO.md)** — Completed milestones and deferred items.
+- **[Changelog](CHANGELOG.md)** — Version history and release notes.
