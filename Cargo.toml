@@ -36,7 +36,7 @@ self-replace = "1"
 tempfile = "3"
 windows-sys = { version = "0.61", features = ["Win32_Networking_WinHttp", "Win32_Foundation", "Win32_Security", "Win32_System_DataExchange", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 winreg = "0.56"
-zip = { version = "4", default-features = false, features = ["deflate-flate2"] }
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 
 [target."cfg(unix)".dependencies]
 libc = "0.2.191"
