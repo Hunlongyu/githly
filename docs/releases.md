@@ -25,6 +25,12 @@ cargo build --release --locked
 
 安装包最低 Windows 10，按用户安装到 `%LOCALAPPDATA%/Programs/Githly`，不要求管理员权限。升级关闭占用文件的应用前使用正常安装向导，不强行终止；完成后可启动新版。用户配置保留在 `%APPDATA%/githly`，卸载也不删除配置。便携版的更新按钮同样打开安装向导，不原地静默替换任意目录中的 EXE。
 
+## macOS 和 Linux 测试包
+
+`.github/workflows/desktop.yml` 在原生运行器上执行测试、Clippy、Release 构建、打包和启动检查。macOS 无 Metal 设备时验证应用签名、包结构及无窗口界面测试。Artifacts 中的 DMG 和 Debian 包按架构区分；普通分支构建只上传测试包。以后发布稳定标签时，发布任务会等待各平台的构建，并核对清单后上传。
+
+在对应平台运行 `cargo build --release --locked` 后，可用 `bash scripts/package-unix.sh <platform>` 生成同样的包。平台标识为 `macos-arm64`、`macos-x64`、`linux-x64`。Windows x64 客户端继续读取 `update.json`；新平台读取 `update-<platform>.json`，校验版本、下载地址、字节数和 SHA-256，用户点击安装后由系统打开相应包。
+
 ## 客户端检查与镜像
 
 设置中可选手动、每天（默认）、每三天或每周检查。启动至少等待 30 秒，之后每小时轻量判断是否到期；最近检查时间跨启动保留。检查和下载各只有一个活动任务，手动重试至少相隔一分钟；不会在 UI 线程执行网络或文件 I/O。

@@ -111,13 +111,9 @@ messages! {
     create_window => "无法创建 Githly 窗口", "Could not create the Githly window";
     #[cfg(windows)]
     instance_lock => "无法创建 Githly 单实例锁", "Could not create the Githly single-instance lock";
-    #[cfg(windows)]
     instance_not_ready => "已有 Githly 进程，但主窗口尚未就绪", "Githly is running, but its window is not ready";
-    #[cfg(windows)]
     path_too_long => "仓库路径过长", "Repository path is too long";
-    #[cfg(windows)]
     instance_unresponsive => "已有 Githly 窗口未响应启动请求", "The existing Githly window did not respond";
-    #[cfg(windows)]
     launch_rejected => "已有 Githly 窗口未接受启动请求", "The existing Githly window declined the launch request";
     #[cfg(windows)]
     window_handle => "无法取得主窗口句柄", "Could not get the main window handle";

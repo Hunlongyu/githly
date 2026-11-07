@@ -49,9 +49,12 @@ jobs:
           path: dist/release/*
           if-no-files-found: error
           retention-days: 14
+  unix-packages:
+    if: startsWith(github.ref, 'refs/tags/')
+    uses: ./.github/workflows/desktop.yml
   release:
     if: startsWith(github.ref, 'refs/tags/')
-    needs: build
+    needs: [build, unix-packages]
     runs-on: windows-2025
     permissions:
       contents: write
@@ -61,8 +64,8 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
-          name: windows-x64
           path: release
+          merge-multiple: true
       - name: Publish GitHub Release
         shell: pwsh
         env:
@@ -78,6 +81,7 @@ jobs:
           $version = $env:RELEASE_TAG.Substring(1)
           $setup = Get-Item -LiteralPath "release/Githly-$version-windows-x64-setup.exe"
           $portable = Get-Item -LiteralPath "release/Githly-$version-windows-x64.zip"
+          $platforms = [ordered]@{'macos-arm64' = 'macOS (Apple Silicon)'; 'macos-x64' = 'macOS (Intel)'; 'linux-x64' = 'Linux (amd64)'}
           $url = "https://github.com/$env:GH_REPO/releases/download/$env:RELEASE_TAG"
           $table = @(
             '## 下载'
@@ -85,8 +89,19 @@ jobs:
             '| 系统 | 下载 |'
             '| --- | --- |'
             "| Windows 10/11 | [![Setup x64](https://img.shields.io/badge/Setup-x64-2d7d9a?style=flat-square)]($url/$($setup.Name))<br>[![Portable x64](https://img.shields.io/badge/Portable-x64-67b7d1?style=flat-square)]($url/$($portable.Name)) |"
+            foreach ($platform in $platforms.Keys) {
+              $ext = if ($platform -eq 'linux-x64') { 'deb' } else { 'dmg' }
+              $package = Get-Item -LiteralPath "release/Githly-$version-$platform.$ext"
+              $manifest = Get-Content -LiteralPath "release/update-$platform.json" -Raw | ConvertFrom-Json
+              if ($manifest.version -ne $version -or $manifest.installer.url -ne "$url/$($package.Name)" -or $manifest.installer.size -ne $package.Length -or $manifest.installer.sha256 -ne (Get-FileHash -LiteralPath $package.FullName).Hash) { throw "Invalid $platform manifest" }
+              "| $($platforms[$platform]) | [$($package.Name)]($url/$($package.Name)) |"
+            }
           )
           ((@($body, '') + $table) -join "`n") | Set-Content -LiteralPath release-notes.md -Encoding utf8NoBOM
+          $sums = Get-ChildItem -LiteralPath release -File | Where-Object Name -ne 'SHA256SUMS.txt' | Sort-Object Name | ForEach-Object {
+            '{0}  {1}' -f (Get-FileHash -LiteralPath $_.FullName).Hash.ToLowerInvariant(), $_.Name
+          }
+          $sums | Set-Content -LiteralPath release/SHA256SUMS.txt -Encoding utf8NoBOM
           $artifacts = Get-ChildItem -LiteralPath release -File | ForEach-Object FullName
           gh release create $env:RELEASE_TAG @artifacts --repo $env:GH_REPO --verify-tag --title "Githly $env:RELEASE_TAG" --notes-file release-notes.md --latest
           if ($LASTEXITCODE -ne 0) { throw 'GitHub Release publish failed.' }

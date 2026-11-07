@@ -11,6 +11,8 @@ mod motion;
 #[cfg(windows)]
 mod single_instance;
 mod theme;
+#[cfg(unix)]
+mod unix_instance;
 mod update;
 
 use config::{Appearance, ConfigStore};
@@ -43,6 +45,12 @@ fn main() -> anyhow::Result<()> {
     };
     i18n::init(config.language);
     let initial_project = std::env::args_os().nth(1).map(std::path::PathBuf::from);
+    #[cfg(unix)]
+    let Some(instance) = unix_instance::claim_or_forward(initial_project.as_deref())
+        .inspect_err(|error| tracing::error!("{error:#}"))?
+    else {
+        return Ok(());
+    };
     #[cfg(windows)]
     let Some(_instance_guard) = single_instance::claim_or_forward(initial_project.as_deref())
         .inspect_err(|error| tracing::error!("{error:#}"))?
@@ -61,10 +69,42 @@ fn main() -> anyhow::Result<()> {
         })
         .detach();
         cx.bind_keys([
-            KeyBinding::new("secondary-o", app::OpenProject, None),
-            KeyBinding::new("secondary-,", app::OpenSettings, None),
-            KeyBinding::new("secondary-f", app::FocusHistory, None),
-            KeyBinding::new("secondary-b", app::ToggleBranches, None),
+            KeyBinding::new(
+                if cfg!(target_os = "macos") {
+                    "cmd-o"
+                } else {
+                    "ctrl-o"
+                },
+                app::OpenProject,
+                None,
+            ),
+            KeyBinding::new(
+                if cfg!(target_os = "macos") {
+                    "cmd-,"
+                } else {
+                    "ctrl-,"
+                },
+                app::OpenSettings,
+                None,
+            ),
+            KeyBinding::new(
+                if cfg!(target_os = "macos") {
+                    "cmd-f"
+                } else {
+                    "ctrl-f"
+                },
+                app::FocusHistory,
+                None,
+            ),
+            KeyBinding::new(
+                if cfg!(target_os = "macos") {
+                    "cmd-b"
+                } else {
+                    "ctrl-b"
+                },
+                app::ToggleBranches,
+                None,
+            ),
         ]);
         let mode = match config.appearance {
             Appearance::Light => ThemeMode::Light,
@@ -92,6 +132,8 @@ fn main() -> anyhow::Result<()> {
                 #[cfg(windows)]
                 single_instance::listen(window, panel.downgrade(), cx)
                     .unwrap_or_else(|error| panic!("{}: {error:#}", messages().register_launch()));
+                #[cfg(unix)]
+                instance.listen(window, panel.downgrade(), cx);
                 panel
             },
         )

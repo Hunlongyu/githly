@@ -2139,6 +2139,7 @@ dependencies = [
  "futures-lite",
  "gpui-kit",
  "image",
+ "libc",
  "raw-window-handle",
  "resvg 0.46.0",
  "semver",

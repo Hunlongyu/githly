@@ -197,6 +197,14 @@ fn manifest_and_mirror_addresses_cannot_supply_arbitrary_executables() {
     let mut update = available(b"installer");
     update.manifest.installer.url = "https://other.example/payload.exe".into();
     assert!(validate(&update.manifest).is_err());
+    let wrong_platform = if cfg!(windows) {
+        "linux-x64.deb"
+    } else {
+        "windows-x64-setup.exe"
+    };
+    update.manifest.installer.url =
+        format!("{RELEASES}/download/v0.2.0/Githly-0.2.0-{wrong_platform}");
+    assert!(validate(&update.manifest).is_err());
     update = available(b"installer");
     update.manifest.installer.size = MAX_INSTALLER + 1;
     assert!(validate(&update.manifest).is_err());

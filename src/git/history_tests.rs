@@ -1,6 +1,12 @@
 use super::*;
 use std::io::Write;
 
+pub(crate) const NO_HOOKS: &str = if cfg!(windows) {
+    "core.hooksPath=NUL"
+} else {
+    "core.hooksPath=/dev/null"
+};
+
 pub(crate) fn command(git: &Git, root: &Path, args: &[&str]) -> Vec<u8> {
     let mut cmd = std::process::Command::new(&git.executable);
     #[cfg(windows)]
@@ -128,7 +134,7 @@ fn stream_crosses_batches_without_duplicates_or_graph_discontinuity() {
             root,
             &[
                 "-c",
-                "core.hooksPath=NUL",
+                NO_HOOKS,
                 "commit",
                 "--allow-empty",
                 "-m",
@@ -285,7 +291,7 @@ fn branch_browsing_is_read_only_and_checkout_rejects_dirty_worktree() {
             root,
             &[
                 "-c",
-                "core.hooksPath=NUL",
+                NO_HOOKS,
                 "commit",
                 "--allow-empty",
                 "-m",
@@ -332,11 +338,7 @@ fn stash_details_bind_object_and_include_untracked_versions() {
         let root = directory.path();
         std::fs::write(root.join("tracked.txt"), "original\n").unwrap();
         command(&git, root, &["add", "tracked.txt"]);
-        command(
-            &git,
-            root,
-            &["-c", "core.hooksPath=NUL", "commit", "-m", "file"],
-        );
+        command(&git, root, &["-c", NO_HOOKS, "commit", "-m", "file"]);
         std::fs::write(root.join("tracked.txt"), "stash contents\n").unwrap();
         std::fs::write(root.join("未跟踪.txt"), "untracked snapshot\n").unwrap();
         command(&git, root, &["stash", "push", "-u", "-m", "first stash"]);
@@ -381,11 +383,7 @@ fn staged_and_working_changes_keep_distinct_text_and_image_versions() {
         std::fs::write(root.join("file.txt"), "base\n").unwrap();
         std::fs::write(root.join("file.png"), b"base image").unwrap();
         command(&git, root, &["add", "."]);
-        command(
-            &git,
-            root,
-            &["-c", "core.hooksPath=NUL", "commit", "-m", "base"],
-        );
+        command(&git, root, &["-c", NO_HOOKS, "commit", "-m", "base"]);
         std::fs::write(root.join("file.txt"), "index\n").unwrap();
         std::fs::write(root.join("file.png"), b"index image").unwrap();
         command(&git, root, &["add", "."]);
@@ -450,11 +448,7 @@ fn asynchronous_statistics_distinguish_text_binary_and_untracked() {
         let root = directory.path();
         std::fs::write(root.join("file.txt"), "base\n").unwrap();
         command(&git, root, &["add", "."]);
-        command(
-            &git,
-            root,
-            &["-c", "core.hooksPath=NUL", "commit", "-m", "base"],
-        );
+        command(&git, root, &["-c", NO_HOOKS, "commit", "-m", "base"]);
         std::fs::write(root.join("file.txt"), "one\ntwo\n").unwrap();
         std::fs::write(root.join("binary.dat"), b"a\0b").unwrap();
         std::fs::write(root.join("new.txt"), "new\nlines\n").unwrap();

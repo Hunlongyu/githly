@@ -310,7 +310,7 @@ fn refresh_keeps_commit_diff_and_scroll_anchor_and_close_releases_session(cx: &m
         directory.path(),
         &[
             "-c",
-            "core.hooksPath=NUL",
+            crate::git::history_tests::NO_HOOKS,
             "commit",
             "--allow-empty",
             "-m",

@@ -1,13 +1,13 @@
 <div align="center">
   <img src="assets/branding/githly-256.png" width="88" alt="Githly Logo" />
   <h1>Githly</h1>
-  <p><strong>A Native Windows Git Companion for AI-Driven Development Workflows</strong></p>
+  <p><strong>A Native Desktop Git Companion for AI-Driven Development Workflows</strong></p>
 
   <p>
     <a href="https://github.com/Hunlongyu/githly/releases/latest"><img src="https://img.shields.io/github/v/release/Hunlongyu/githly?style=flat-square&label=Release&color=2d7d9a" alt="Latest Release" /></a>
     <a href="https://github.com/Hunlongyu/githly/actions/workflows/windows.yml"><img src="https://img.shields.io/github/actions/workflow/status/Hunlongyu/githly/windows.yml?style=flat-square&label=Windows%20Build" alt="Windows Build Status" /></a>
     <a href="https://github.com/Hunlongyu/githly/releases"><img src="https://img.shields.io/github/downloads/Hunlongyu/githly/total?style=flat-square&label=Downloads&color=67b7d1" alt="Total Downloads" /></a>
-    <img src="https://img.shields.io/badge/Platform-Windows%2010%2F11%20(x64)-0078D4?style=flat-square" alt="Platform Windows 10/11 x64" />
+    <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-0078D4?style=flat-square" alt="Windows, macOS and Linux" />
     <img src="https://img.shields.io/badge/Built%20with-Rust%20%2B%20GPUI-dea584?style=flat-square" alt="Built with Rust and GPUI" />
   </p>
 
@@ -28,7 +28,7 @@
 
 ---
 
-**Githly** is a fast, read-focused native Windows Git observation panel designed for modern AI-assisted coding workflows. When AI agents, CLI tools, or external editors modify files and create commits in the background, Githly automatically refreshes your local repository state—letting you inspect working tree changes, staged diffs, commit graphs, stashes, and worktrees in a single window without interrupting your tools.
+**Githly** is a fast, read-focused native desktop Git browser designed for modern AI-assisted coding workflows. When AI agents, CLI tools, or external editors modify files and create commits in the background, Githly automatically refreshes your local repository state—letting you inspect working tree changes, staged diffs, commit graphs, stashes, and worktrees in a single window without interrupting your tools.
 
 ## Preview
 
@@ -53,7 +53,7 @@
 
 ## Download & Installation
 
-Requires **Windows 10 or 11 (x64)** and system **Git**. If Git is not detected automatically in `PATH`, you can specify an existing `git.exe` path in Settings (`Ctrl+,`).
+Install Git before opening a repository. Use Settings to choose its executable if it is not on PATH. Windows x64 is available as a stable release. The first macOS and Linux packages are distributed through CI.
 
 Githly uses the first supported language in your system preferences (English or Simplified Chinese), with English as the fallback. To override it, open **Settings → Language**, choose a language, and restart Githly.
 
@@ -64,11 +64,16 @@ Download the latest installer or portable archive from **[GitHub Releases](https
 | **Installer** *(Recommended)* | `*-windows-x64-setup.exe` | Run the installer to install Githly for the current user (no admin rights required), then launch **Githly** from the Start Menu. |
 | **Portable ZIP** | `*-windows-x64.zip` | Extract the archive to any folder and run `Githly.exe` directly. |
 
-> **Development Builds:** To try the latest main-branch build, sign in to GitHub and download the `windows-x64` artifact from a completed run on the **[Windows Build Workflow](https://github.com/Hunlongyu/githly/actions/workflows/windows.yml)** page (retained for 14 days).
+**CI test packages.** Sign in to GitHub and open a successful main-branch run. [Windows builds](https://github.com/Hunlongyu/githly/actions/workflows/windows.yml) contain the installer and portable ZIP. [macOS and Linux builds](https://github.com/Hunlongyu/githly/actions/workflows/desktop.yml) contain these artifacts for 14 days:
+
+| Artifact | Installation |
+| --- | --- |
+| `macos-arm64` / `macos-x64` | Choose Apple Silicon or Intel, extract the artifact, mount the DMG, then drag Githly to Applications. CI bundles are ad-hoc signed and are not notarized. |
+| `linux-x64` | On Ubuntu 24.04 amd64, extract the artifact and run `sudo apt install ./Githly-*-linux-x64.deb` from that directory. Launch Githly from the app menu or run `githly /path/to/repository`. The desktop requires a working Vulkan driver and X11 or Wayland. |
 
 ## Quick Start
 
-Githly runs a single window per Windows user session. Launching it again focuses or restores the existing window, and passing a repository path as a CLI argument opens that project directly in the active window.
+Githly runs a single window per user session. Launching it again focuses or restores the existing window, and passing a repository path as a CLI argument opens that project directly in the active window.
 
 1. **Open a Repository** — Drag and drop a local Git folder into the window, press `Ctrl+O` to browse, or pick a project from **Recent Repositories**.
 2. **Inspect Working Changes** — Switch between **All**, **Unstaged**, and **Staged** in the left **Changes** panel, and click any file to view its diff. Files with both staged and unstaged edits can be inspected separately.
@@ -94,9 +99,11 @@ Press `Ctrl+,` to open **Settings → Software Update**. You can check for updat
 
 When a new release is available:
 - Click **Release Notes** to review changes, or click **Download Update**.
-- After verifying the installer size and `SHA-256` digest, Githly displays **Install Update…** to launch the Windows setup wizard.
+- After verifying the installer size and `SHA-256` digest, Githly displays **Install Update…** to open the platform package (Windows setup, macOS disk image, or Linux package handler).
 - Portable ZIP users who prefer keeping a standalone folder can download the latest `.zip` directly from the release page.
 - If GitHub API rate limits apply on your network, you can configure a trusted HTTPS Release Mirror prefix in Settings. See **[Release & Update Documentation](docs/releases.md)** for details.
+
+On macOS, use Command in place of Ctrl for Githly shortcuts.
 
 ## Keyboard Shortcuts
 
@@ -110,6 +117,8 @@ When a new release is available:
 
 ### Configuration & Logs
 
+macOS stores settings and logs under `~/Library/Application Support/githly`. Linux uses the XDG config and data directories, usually `~/.config/githly` and `~/.local/share/githly`. On Windows:
+
 - **Configuration:** `%APPDATA%\githly\config.json` (stores recent repositories, theme, panel dimensions, custom Git path, and update preferences).
 - **Application Logs:** `%LOCALAPPDATA%\githly\logs` (records warnings and operational errors for troubleshooting).
 
@@ -120,6 +129,8 @@ When a new release is available:
 - **Rust MSVC Toolchain** (pinned automatically via `rust-toolchain.toml`)
 - **Visual Studio C++ Build Tools** & **Windows SDK**
 - **CMake**
+
+On macOS, install Xcode and its command-line tools. On Linux, use the packages listed in the [native build workflow](.github/workflows/desktop.yml). All platforms use the pinned Rust toolchain.
 
 ### Run & Test
 

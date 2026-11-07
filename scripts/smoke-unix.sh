@@ -16,7 +16,11 @@ case "$platform" in
             trap "kill $pid 2>/dev/null || true" EXIT
             for ((i=0; i<60; i++)); do
                 kill -0 "$pid"
-                if xdotool search --onlyvisible --name "^Githly$" >/dev/null; then exit 0; fi
+                if xdotool search --onlyvisible --name "^Githly$" >/dev/null; then
+                    timeout 10 "$1" "$2"
+                    kill -0 "$pid"
+                    exit 0
+                fi
                 sleep 1
             done
             exit 1

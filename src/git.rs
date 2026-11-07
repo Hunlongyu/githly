@@ -825,7 +825,18 @@ fn find_on_path() -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     std::env::split_paths(&path)
         .map(|dir| dir.join(if cfg!(windows) { "git.exe" } else { "git" }))
-        .find(|file| file.is_file())
+        .find(|file| {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                file.metadata()
+                    .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+            }
+            #[cfg(windows)]
+            {
+                file.is_file()
+            }
+        })
 }
 fn parse_log(bytes: &[u8]) -> Vec<Commit> {
     let fields: Vec<_> = bytes.split(|b| *b == 0).collect();
@@ -1021,7 +1032,7 @@ mod tests {
                 .unwrap();
             let commit = [
                 "-c",
-                "core.hooksPath=NUL",
+                crate::git::history_tests::NO_HOOKS,
                 "commit",
                 "--no-gpg-sign",
                 "-m",
@@ -1185,7 +1196,7 @@ mod tests {
             command(&["add", "--", "."]);
             command(&[
                 "-c",
-                "core.hooksPath=NUL",
+                crate::git::history_tests::NO_HOOKS,
                 "commit",
                 "-m",
                 "初次提交 | test",
@@ -1225,7 +1236,7 @@ mod tests {
             );
             command(&[
                 "-c",
-                "core.hooksPath=NUL",
+                crate::git::history_tests::NO_HOOKS,
                 "commit",
                 "--allow-empty",
                 "-m",
@@ -1238,7 +1249,7 @@ mod tests {
             command(&["switch", "upstream"]);
             command(&[
                 "-c",
-                "core.hooksPath=NUL",
+                crate::git::history_tests::NO_HOOKS,
                 "commit",
                 "--allow-empty",
                 "-m",

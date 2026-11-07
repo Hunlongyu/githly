@@ -1,13 +1,13 @@
 <div align="center">
   <img src="assets/branding/githly-256.png" width="88" alt="Githly 图标" />
   <h1>Githly</h1>
-  <p><strong>面向 AI 开发流程的 Windows 原生 Git 观察面板</strong></p>
+  <p><strong>面向 AI 开发流程的 原生 Git 观察面板</strong></p>
 
   <p>
     <a href="https://github.com/Hunlongyu/githly/releases/latest"><img src="https://img.shields.io/github/v/release/Hunlongyu/githly?style=flat-square&label=Release&color=2d7d9a" alt="最新版本" /></a>
     <a href="https://github.com/Hunlongyu/githly/actions/workflows/windows.yml"><img src="https://img.shields.io/github/actions/workflow/status/Hunlongyu/githly/windows.yml?style=flat-square&label=Windows%20Build" alt="Windows 构建状态" /></a>
     <a href="https://github.com/Hunlongyu/githly/releases"><img src="https://img.shields.io/github/downloads/Hunlongyu/githly/total?style=flat-square&label=Downloads&color=67b7d1" alt="GitHub Release 累计下载次数" /></a>
-    <img src="https://img.shields.io/badge/Platform-Windows%2010%2F11%20(x64)-0078D4?style=flat-square" alt="支持 Windows 10/11 x64" />
+    <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-0078D4?style=flat-square" alt="Windows、macOS 和 Linux" />
     <img src="https://img.shields.io/badge/Built%20with-Rust%20%2B%20GPUI-dea584?style=flat-square" alt="基于 Rust 与 GPUI 构建" />
   </p>
 
@@ -28,7 +28,7 @@
 
 ---
 
-**Githly** 是一款轻量、专注于代码状态观察的 Windows 原生 Git 桌面面板，专为 AI 辅助开发工作流打造。当 AI 编程助手、命令行工具或其他编辑器在后台修改代码、创建提交时，Githly 会自动刷新本地仓库状态。你可以在同一窗口内直观查看工作区与暂存区变更、双栏文件差异、分支关系图、Stash 以及多个 Worktree 状态，而不会干扰正在运行的开发工具。
+**Githly** 是一款轻量、专注于代码状态观察的 原生 Git 桌面面板，专为 AI 辅助开发工作流打造。当 AI 编程助手、命令行工具或其他编辑器在后台修改代码、创建提交时，Githly 会自动刷新本地仓库状态。你可以在同一窗口内直观查看工作区与暂存区变更、双栏文件差异、分支关系图、Stash 以及多个 Worktree 状态，而不会干扰正在运行的开发工具。
 
 ## 界面预览
 
@@ -53,7 +53,7 @@
 
 ## 下载与安装
 
-需要 **Windows 10 或 11（x64）** 和系统 **Git**。若 Githly 未在环境变量中检测到 Git，可在设置（`Ctrl+,`）中手动指定已有的 `git.exe`。
+各平台均需安装 Git。如果环境变量中找不到 Git，可在设置中选择可执行文件。Windows x64 已有正式版，首批 macOS 和 Linux 安装包通过 CI 提供。
 
 Githly 默认按系统语言偏好顺序选择简体中文或英文，均不匹配时使用英文。在 **设置 → 语言** 中可手动切换，重启 Githly 后生效。
 
@@ -64,11 +64,18 @@ Githly 默认按系统语言偏好顺序选择简体中文或英文，均不匹�
 | **安装版** *（推荐）* | `-windows-x64-setup.exe` | 运行安装程序，跟随向导为当前用户安装（无需管理员权限），之后从开始菜单打开 **Githly**。 |
 | **便携版** | `-windows-x64.zip` | 解压压缩包到任意目录，直接运行其中的 `Githly.exe`。 |
 
-> **试用开发构建：** 如需体验最新开发版，可登录 GitHub，在 **[Windows 构建工作流](https://github.com/Hunlongyu/githly/actions/workflows/windows.yml)** 成功构建的 **Artifacts** 区域下载 `windows-x64`（开发构建保留 14 天）。
+**CI 测试包**：登录 GitHub，打开 main 分支成功的构建，在 Artifacts 中下载，保留 14 天。[Windows 构建](https://github.com/Hunlongyu/githly/actions/workflows/windows.yml)包含安装包和便携 ZIP。[macOS 和 Linux 构建](https://github.com/Hunlongyu/githly/actions/workflows/desktop.yml)提供以下测试包。
+
+| 测试包 | 安装方法 |
+| --- | --- |
+| `macos-arm64` / `macos-x64` | 分别适用于 Apple Silicon 和 Intel。解压后打开 DMG，将 Githly 拖入「应用程序」。测试包使用临时签名，尚未进行 Apple 公证。 |
+| `linux-x64` | 在 Ubuntu 24.04 amd64 上解压，在该目录运行 `sudo apt install ./Githly-*-linux-x64.deb`。可通过应用菜单或 `githly /path/to/repository` 启动，需要 Vulkan 驱动和 X11 或 Wayland。 |
+
+macOS 上的应用快捷键使用 Command，对应下文的 Ctrl。
 
 ## 快速上手
 
-同一 Windows 登录会话只运行一个 Githly 窗口。再次启动会唤回已有窗口（已最小化时自动恢复）；启动时若通过命令行传入仓库目录，会在该窗口中直接打开对应项目。
+同一用户会话只运行一个 Githly 窗口。再次从命令行启动会唤回已有窗口，传入仓库目录会在该窗口中打开对应项目。
 
 1. **打开仓库** — 把本地 Git 仓库目录拖进窗口，或按 `Ctrl+O` 选取目录；用过的仓库可直接从「最近打开」进入。
 2. **查看工作区更改** — 在左侧「更改」面板切换「全部」「未暂存」「已暂存」，点击文件查看双栏差异。同一文件既有已暂存又有未暂存修改时，可分别查看两部分。
@@ -94,7 +101,7 @@ Githly 默认按系统语言偏好顺序选择简体中文或英文，均不匹�
 
 发现新版本后：
 - 点击「更新说明」查看版本变化，或点击「下载更新」。
-- 客户端核对安装包大小和 `SHA-256` 校验值后会显示「安装更新…」，点击即可启动 Windows 安装向导。
+- 客户端核对本机平台安装包的大小和 `SHA-256` 后显示「安装更新…」。Windows 打开安装向导，macOS 打开磁盘映像，Linux 交由桌面包管理器处理。
 - 便携版用户若想保留解压即用的方式，可前往发布页直接下载新版 ZIP。
 - 设置中也支持配置 GitHub API 限流时使用的可信 HTTPS Release 镜像前缀，详见 **[发布与更新说明](docs/releases.md)**。
 
@@ -110,6 +117,8 @@ Githly 默认按系统语言偏好顺序选择简体中文或英文，均不匹�
 
 ### 配置文件与日志
 
+macOS 在 `~/Library/Application Support/githly` 保存配置和日志。Linux 使用 XDG 配置和数据目录，默认分别为 `~/.config/githly` 和 `~/.local/share/githly`。Windows 路径如下。
+
 - **配置文件：** `%APPDATA%\githly\config.json`（保存最近项目、主题、面板尺寸、Git 路径和更新偏好）。
 - **运行日志：** `%LOCALAPPDATA%\githly\logs`（遇到读取或更新错误时可在此查看诊断日志）。
 
@@ -117,9 +126,10 @@ Githly 默认按系统语言偏好顺序选择简体中文或英文，均不匹�
 
 ### 环境要求
 
-- **Rust MSVC 工具链**（仓库通过 `rust-toolchain.toml` 自动固定版本）
+- Windows 使用 **Rust MSVC 工具链**（仓库通过 `rust-toolchain.toml` 自动固定版本）
 - **Visual Studio C++ Build Tools** 与 **Windows SDK**
 - **CMake**
+- macOS 需安装 Xcode 和命令行工具。Linux 原生依赖见[构建工作流](.github/workflows/desktop.yml)。
 
 ### 克隆与运行
 
