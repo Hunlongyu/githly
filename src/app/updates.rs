@@ -1,4 +1,5 @@
 use super::*;
+use crate::i18n::messages;
 use crate::update;
 use gpui_kit::component::{input::Input, tab::Tab};
 use std::time::Duration;
@@ -48,14 +49,14 @@ impl GitPanel {
             return;
         }
         if update::now().saturating_sub(self.config.updates.last_check) < 60 {
-            self.updates.message = "刚刚已检查，请至少等待一分钟再试。".into();
+            self.updates.message = messages().check_cooldown().into();
             cx.notify();
             return;
         }
         self.config.updates.last_check = update::now();
         self.save(cx);
         self.updates.busy = true;
-        self.updates.message = "正在检查更新…".into();
+        self.updates.message = messages().checking_updates().into();
         self.updates.available = None;
         self.updates.installer = None;
         let mut preferences = self.config.updates.clone();
@@ -75,21 +76,21 @@ impl GitPanel {
                             || {
                                 format!(
                                     "{} · {}",
-                                    if check.source.starts_with("镜像：") {
-                                        "镜像暂未提供较新版本"
+                                    if matches!(check.source, update::Source::Mirror(_)) {
+                                        messages().mirror_no_update()
                                     } else {
-                                        "已是最新版本"
+                                        messages().up_to_date()
                                     },
                                     check.source
                                 )
                             },
                             |available| {
-                                format!("发现 {} · {}", available.manifest.version, check.source)
+                                messages().new_version(&available.manifest.version, &check.source)
                             },
                         );
                         this.updates.available = check.available;
                     }
-                    Err(error) => this.updates.message = format!("检查失败：{error:#}"),
+                    Err(error) => this.updates.message = messages().check_failed(error),
                 }
                 cx.notify();
             });
@@ -105,7 +106,7 @@ impl GitPanel {
             return;
         };
         self.updates.busy = true;
-        self.updates.message = "正在后台下载安装包…".into();
+        self.updates.message = messages().downloading().into();
         let task = cx.background_spawn(async move { update::download(&available) });
         self.updates.task = Some(cx.spawn(async move |this, cx| {
             let result = task.await;
@@ -114,9 +115,9 @@ impl GitPanel {
                 match result {
                     Ok(path) => {
                         this.updates.installer = Some(path);
-                        this.updates.message = "安装包已下载并通过校验，可启动安装。".into();
+                        this.updates.message = messages().download_verified().into();
                     }
-                    Err(error) => this.updates.message = format!("下载失败：{error:#}"),
+                    Err(error) => this.updates.message = messages().download_failed(error),
                 }
                 cx.notify();
             });
@@ -135,7 +136,7 @@ impl GitPanel {
             return;
         };
         self.updates.busy = true;
-        self.updates.message = "正在重新校验并打开安装程序…".into();
+        self.updates.message = messages().opening_installer().into();
         let task = cx
             .background_spawn(async move { update::install(&path, &available.manifest.installer) });
         self.updates.task = Some(cx.spawn(async move |this, cx| {
@@ -143,8 +144,8 @@ impl GitPanel {
             let _ = this.update(cx, |this, cx| {
                 this.updates.busy = false;
                 this.updates.message = match result {
-                    Ok(()) => "安装程序已打开；完成后可重新启动 Githly。".into(),
-                    Err(error) => format!("安装未启动：{error:#}；当前版本可继续使用"),
+                    Ok(()) => messages().installer_opened().into(),
+                    Err(error) => messages().install_failed(error),
                 };
                 cx.notify();
             });
@@ -155,55 +156,112 @@ impl GitPanel {
     pub(super) fn update_settings(&self, cx: &mut Context<Self>) -> AnyElement {
         let busy = self.updates.busy;
         let hours = self.config.updates.interval_hours;
-        v_flex().gap(px(8.)).child(
-            h_flex().gap(px(8.)).justify_between()
-                .child(div().font_semibold().child(format!("软件更新 · {}", env!("CARGO_PKG_VERSION"))))
-                .child(controls::button("check-update").label("检查更新").disabled(busy)
-                    .on_click(cx.listener(|this, _, _, cx| this.check_update(cx))))
-        ).child(
-            controls::segmented("update-interval")
-                .selected_index(if !self.config.updates.enabled { 0 } else if hours >= 168 { 3 } else if hours > 24 { 2 } else { 1 })
-                .child(Tab::new().label("手动"))
-                .child(Tab::new().label("每天"))
-                .child(Tab::new().label("每三天"))
-                .child(Tab::new().label("每周"))
-                .on_click(cx.listener(|this, index: &usize, _, cx| {
-                    this.config.updates.enabled = *index != 0;
-                    this.config.updates.interval_hours = [24, 24, 72, 168][*index];
-                    this.save(cx);
-                    cx.notify();
-                }))
-        ).when_some(self.updates.mirror_input.as_ref(), |view, input| {
-            view.child(h_flex().gap(px(8.)).child(Input::new(input).small().flex_1())
-                .child(controls::button("save-mirror").label("保存镜像").disabled(busy)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        let value = this.updates.mirror_input.as_ref().unwrap().read(cx).value();
-                        match update::mirror_prefix(&value) {
-                            Ok(value) => {
-                                this.config.updates.mirror = value;
-                                this.save(cx);
-                                this.updates.message = "更新源设置已保存。".into();
-                                this.updates.available = None;
-                                this.updates.installer = None;
-                            }
-                            Err(error) => this.updates.message = error.to_string(),
-                        }
+        v_flex()
+            .gap(px(8.))
+            .child(
+                h_flex()
+                    .gap(px(8.))
+                    .justify_between()
+                    .child(
+                        div()
+                            .font_semibold()
+                            .child(messages().software_updates(env!("CARGO_PKG_VERSION"))),
+                    )
+                    .child(
+                        controls::button("check-update")
+                            .label(messages().check_updates())
+                            .disabled(busy)
+                            .on_click(cx.listener(|this, _, _, cx| this.check_update(cx))),
+                    ),
+            )
+            .child(
+                controls::segmented("update-interval")
+                    .selected_index(if !self.config.updates.enabled {
+                        0
+                    } else if hours >= 168 {
+                        3
+                    } else if hours > 24 {
+                        2
+                    } else {
+                        1
+                    })
+                    .child(Tab::new().label(messages().manual()))
+                    .child(Tab::new().label(messages().daily()))
+                    .child(Tab::new().label(messages().three_days()))
+                    .child(Tab::new().label(messages().weekly()))
+                    .on_click(cx.listener(|this, index: &usize, _, cx| {
+                        this.config.updates.enabled = *index != 0;
+                        this.config.updates.interval_hours = [24, 24, 72, 168][*index];
+                        this.save(cx);
                         cx.notify();
-                    }))))
-        }).child(div().text_size(px(11.)).text_color(cx.theme().muted_foreground)
-            .child("镜像填 HTTPS 前缀，需支持在前缀后拼接完整 GitHub Release 地址；留空使用 GitHub。"))
-        .when(!self.updates.message.is_empty(), |view| view.child(div().text_size(px(12.)).child(self.updates.message.clone())))
-        .when_some(self.updates.available.as_ref(), |view, available| {
-            let notes = available.manifest.notes_url.clone();
-            view.child(h_flex().gap(px(8.))
-                .child(controls::button("release-notes").label("更新说明").on_click(move |_, _, cx| cx.open_url(&notes)))
-                .child(if self.updates.installer.is_some() {
-                    controls::button("install-update").primary().label("安装更新…").disabled(busy)
-                        .on_click(cx.listener(|this, _, _, cx| this.install_update(cx)))
-                } else {
-                    controls::button("download-update").primary().label("下载更新").disabled(busy)
-                        .on_click(cx.listener(|this, _, _, cx| this.download_update(cx)))
-                }))
-        }).into_any_element()
+                    })),
+            )
+            .when_some(self.updates.mirror_input.as_ref(), |view, input| {
+                view.child(
+                    h_flex()
+                        .gap(px(8.))
+                        .child(Input::new(input).small().flex_1())
+                        .child(
+                            controls::button("save-mirror")
+                                .label(messages().save_mirror())
+                                .disabled(busy)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    let value = this
+                                        .updates
+                                        .mirror_input
+                                        .as_ref()
+                                        .unwrap()
+                                        .read(cx)
+                                        .value();
+                                    match update::mirror_prefix(&value) {
+                                        Ok(value) => {
+                                            this.config.updates.mirror = value;
+                                            this.save(cx);
+                                            this.updates.message = messages().mirror_saved().into();
+                                            this.updates.available = None;
+                                            this.updates.installer = None;
+                                        }
+                                        Err(error) => this.updates.message = error.to_string(),
+                                    }
+                                    cx.notify();
+                                })),
+                        ),
+                )
+            })
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(cx.theme().muted_foreground)
+                    .child(messages().mirror_help()),
+            )
+            .when(!self.updates.message.is_empty(), |view| {
+                view.child(div().text_size(px(12.)).child(self.updates.message.clone()))
+            })
+            .when_some(self.updates.available.as_ref(), |view, available| {
+                let notes = available.manifest.notes_url.clone();
+                view.child(
+                    h_flex()
+                        .gap(px(8.))
+                        .child(
+                            controls::button("release-notes")
+                                .label(messages().release_notes())
+                                .on_click(move |_, _, cx| cx.open_url(&notes)),
+                        )
+                        .child(if self.updates.installer.is_some() {
+                            controls::button("install-update")
+                                .primary()
+                                .label(messages().install_update())
+                                .disabled(busy)
+                                .on_click(cx.listener(|this, _, _, cx| this.install_update(cx)))
+                        } else {
+                            controls::button("download-update")
+                                .primary()
+                                .label(messages().download_update())
+                                .disabled(busy)
+                                .on_click(cx.listener(|this, _, _, cx| this.download_update(cx)))
+                        }),
+                )
+            })
+            .into_any_element()
     }
 }

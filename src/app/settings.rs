@@ -1,5 +1,7 @@
 use super::*;
 use crate::config::MotionPreference;
+use crate::i18n::Language;
+use crate::i18n::messages;
 use gpui_kit::component::dialog::DialogEntrance;
 use gpui_kit::component::{Icon, tab::Tab};
 
@@ -19,7 +21,7 @@ impl GitPanel {
     pub(super) fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.updates.mirror_input = Some(cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Release 镜像 HTTPS 前缀（可选）")
+                .placeholder(messages().mirror_placeholder())
                 .default_value(self.config.updates.mirror.clone())
         }));
         let parent = cx.entity();
@@ -35,7 +37,7 @@ impl GitPanel {
                     h_flex()
                         .gap(px(8.))
                         .child(Icon::new(IconName::Settings).size_4())
-                        .child("设置"),
+                        .child(messages().settings()),
                 )
                 .w(px(600.))
                 .centered()
@@ -54,7 +56,7 @@ impl GitPanel {
                         controls::button("settings-done")
                             .primary()
                             .min_w(px(64.))
-                            .label("完成")
+                            .label(messages().done())
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     ),
                 )
@@ -76,13 +78,46 @@ impl GitPanel {
                 h_flex()
                     .justify_between()
                     .gap(px(16.))
-                    .child(div().font_semibold().child("外观"))
+                    .child(div().font_semibold().child(messages().language()))
+                    .child(
+                        controls::segmented("settings-language")
+                            .w(px(300.))
+                            .selected_index(match self.config.language {
+                                Language::System => 0,
+                                Language::Chinese => 1,
+                                Language::English => 2,
+                            })
+                            .child(Tab::new().flex_1().label(messages().system()))
+                            .child(Tab::new().flex_1().label("简体中文"))
+                            .child(Tab::new().flex_1().label("English"))
+                            .on_click(cx.listener(|this, index: &usize, _, cx| {
+                                this.config.language =
+                                    [Language::System, Language::Chinese, Language::English]
+                                        [*index];
+                                this.save(cx);
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .when(self.config.language.resolve() != messages(), |view| {
+                view.child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(messages().language_restart()),
+                )
+            })
+            .child(
+                h_flex()
+                    .justify_between()
+                    .gap(px(16.))
+                    .child(div().font_semibold().child(messages().appearance()))
                     .child(
                         controls::segmented("settings-appearance")
                             .w(px(260.))
                             .selected_index(usize::from(dark))
-                            .child(Tab::new().flex_1().label("浅色"))
-                            .child(Tab::new().flex_1().label("深色"))
+                            .child(Tab::new().flex_1().label(messages().light()))
+                            .child(Tab::new().flex_1().label(messages().dark()))
                             .on_click(cx.listener(|this, index: &usize, window, cx| {
                                 if cx.theme().mode.is_dark() != (*index == 1) {
                                     this.theme(window, cx);
@@ -97,7 +132,7 @@ impl GitPanel {
                         h_flex()
                             .justify_between()
                             .gap(px(16.))
-                            .child(div().font_semibold().child("界面动效"))
+                            .child(div().font_semibold().child(messages().motion()))
                             .child(
                                 controls::segmented("settings-motion")
                                     .w(px(260.))
@@ -106,9 +141,9 @@ impl GitPanel {
                                         MotionPreference::Subtle => 1,
                                         MotionPreference::Off => 2,
                                     })
-                                    .child(Tab::new().flex_1().label("跟随系统"))
-                                    .child(Tab::new().flex_1().label("轻微"))
-                                    .child(Tab::new().flex_1().label("关闭"))
+                                    .child(Tab::new().flex_1().label(messages().system()))
+                                    .child(Tab::new().flex_1().label(messages().subtle()))
+                                    .child(Tab::new().flex_1().label(messages().off()))
                                     .on_click(cx.listener(|this, index: &usize, _, cx| {
                                         let preference = [
                                             MotionPreference::System,
@@ -128,7 +163,7 @@ impl GitPanel {
                         div()
                             .text_size(px(12.))
                             .text_color(cx.theme().muted_foreground)
-                            .child("轻微动效用于按钮切换、关系图和弹窗。仅影响 Githly。"),
+                            .child(messages().motion_help()),
                     ),
             )
             .child(div().h(px(1.)).w_full().bg(cx.theme().border))
@@ -145,12 +180,12 @@ impl GitPanel {
                                     .text_size(px(12.))
                                     .text_color(cx.theme().muted_foreground)
                                     .child(if self.detecting {
-                                        "正在检测…".to_string()
+                                        messages().detecting().to_string()
                                     } else {
                                         self.git
                                             .as_ref()
                                             .map(|git| git.version.clone())
-                                            .unwrap_or_else(|| "未找到 Git".into())
+                                            .unwrap_or_else(|| messages().git_missing().into())
                                     }),
                             ),
                     )
@@ -164,7 +199,10 @@ impl GitPanel {
                             .border_color(cx.theme().input)
                             .bg(cx.theme().background)
                             .text_size(px(12.))
-                            .child(git_path.unwrap_or_else(|| "请选择已安装的 Git 程序".into())),
+                            .child(
+                                git_path
+                                    .unwrap_or_else(|| messages().select_installed_git().into()),
+                            ),
                     )
                     .child(self.git_controls(cx))
                     .when(self.config.git_path.is_some(), |view| {
@@ -172,7 +210,7 @@ impl GitPanel {
                             controls::button("system-git")
                                 .ghost()
                                 .small()
-                                .label("改用系统 PATH")
+                                .label(messages().use_system_path())
                                 .on_click(
                                     cx.listener(|this, _, _, cx| this.detect_git(None, true, cx)),
                                 ),
@@ -193,9 +231,41 @@ impl GitPanel {
                     .gap(px(4.))
                     .text_size(px(11.))
                     .text_color(cx.theme().muted_foreground)
-                    .child("设置自动保存")
+                    .child(messages().settings_autosave())
                     .child(self.store.path.display().to_string()),
             )
             .into_any_element()
+    }
+}
+
+#[cfg(all(test, feature = "ui-tests"))]
+mod tests {
+    use super::{Config, ConfigStore, GitPanel, Language};
+    use gpui_kit::test::TestWindowExt;
+    use gpui_kit::{AppContext, TestAppContext, WindowOptions};
+
+    #[gpui_kit::test]
+    fn language_selector_saves_the_preference(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+        cx.update(gpui_kit::init);
+        let directory = tempfile::tempdir().unwrap();
+        let store = ConfigStore {
+            path: directory.path().join("config.json"),
+        };
+        let (window, panel) = cx.update(|cx| {
+            gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+                cx.new(|cx| GitPanel::new(store.clone(), Config::default(), None, None, window, cx))
+            })
+            .unwrap()
+        });
+        cx.update_window(window, |_, window, cx| {
+            panel.update(cx, |panel, cx| panel.open_settings(window, cx));
+            window.render_frame(cx);
+            window.within("settings-language").click(2_usize, cx);
+            assert_eq!(panel.read(cx).config.language, Language::English);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        assert_eq!(store.load().unwrap().language, Language::English);
     }
 }

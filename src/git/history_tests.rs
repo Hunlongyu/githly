@@ -253,7 +253,7 @@ fn branch_browsing_is_read_only_and_checkout_rejects_dirty_worktree() {
                 .await
                 .unwrap_err()
                 .to_string()
-                .contains("存在更改")
+                .contains(messages().dirty_checkout())
         );
         assert_eq!(git.open(root, 46).await.unwrap().branch, "main");
         std::fs::remove_file(root.join("dirty.txt")).unwrap();
@@ -265,7 +265,7 @@ fn branch_browsing_is_read_only_and_checkout_rejects_dirty_worktree() {
                     .await
                     .unwrap_err()
                     .to_string()
-                    .contains("已有本地分支")
+                    .contains(messages().local_checkout_only())
             );
         }
         let marker = repo.git_dir.join("BISECT_LOG");
@@ -275,7 +275,7 @@ fn branch_browsing_is_read_only_and_checkout_rejects_dirty_worktree() {
                 .await
                 .unwrap_err()
                 .to_string()
-                .contains("正在进行其他操作")
+                .contains(messages().busy_checkout())
         );
         std::fs::remove_file(marker).unwrap();
         git.switch_branch(root, "side").await.unwrap();
@@ -521,7 +521,7 @@ fn linked_worktrees_report_status_and_checkout_respects_occupancy() {
             .iter()
             .find(|entry| entry.branch == "linked")
             .unwrap();
-        assert!(worktree.status.contains("更改"));
+        assert_eq!(worktree.status, messages().worktree_changes(1));
         assert_eq!(git.open(&worktree.path, 46).await.unwrap().branch, "linked");
         assert!(git.switch_branch(directory.path(), "linked").await.is_err());
         assert_eq!(git.open(directory.path(), 46).await.unwrap().branch, "main");

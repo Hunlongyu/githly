@@ -1,4 +1,5 @@
 use crate::git::{ChangedFile, Git};
+use crate::i18n::messages;
 use anyhow::{Context as _, Result};
 use gpui_kit::{
     AnyElement, App, Bounds, InteractiveElement, IntoElement, ObjectFit, ParentElement,
@@ -83,7 +84,7 @@ impl ImageSide {
         match bytes.and_then(|bytes| bytes.map(|bytes| decode(&bytes, path)).transpose()) {
             Ok(Some(preview)) => Self::Ready(preview),
             Ok(None) => Self::Missing,
-            Err(error) => Self::Error(format!("无法预览图片：{error:#}")),
+            Err(error) => Self::Error(messages().image_preview_failed(error)),
         }
     }
 }
@@ -106,9 +107,7 @@ fn decode(bytes: &[u8], path: &str) -> Result<ImagePreview> {
         limits.max_image_width = Some(16384);
         limits.max_image_height = Some(16384);
         reader.limits(limits);
-        let decoded = reader
-            .decode()
-            .context("文件损坏、格式不支持或解码尺寸过大")?;
+        let decoded = reader.decode().context(messages().invalid_image())?;
         let (width, height) = decoded.dimensions();
         let preview = if width > PREVIEW_EDGE || height > PREVIEW_EDGE {
             decoded.thumbnail(PREVIEW_EDGE, PREVIEW_EDGE)
@@ -138,12 +137,12 @@ fn decode_svg(bytes: &[u8]) -> Result<(RgbaImage, u32, u32)> {
     if std::str::from_utf8(bytes).is_ok_and(|svg| svg.contains("<text")) {
         options.fontdb_mut().load_system_fonts();
     }
-    let tree = usvg::Tree::from_data(bytes, &options).context("SVG 文件无法解析")?;
+    let tree = usvg::Tree::from_data(bytes, &options).context(messages().parse_svg())?;
     let original = tree.size().to_int_size();
     let scale = (PREVIEW_EDGE as f32 / tree.size().width().max(tree.size().height())).min(1.);
     let width = (tree.size().width() * scale).round().max(1.) as u32;
     let height = (tree.size().height() * scale).round().max(1.) as u32;
-    let mut pixmap = tiny_skia::Pixmap::new(width, height).context("SVG 尺寸无法预览")?;
+    let mut pixmap = tiny_skia::Pixmap::new(width, height).context(messages().svg_size())?;
     resvg::render(
         &tree,
         tiny_skia::Transform::from_scale(scale, scale),
@@ -159,7 +158,7 @@ fn decode_svg(bytes: &[u8]) -> Result<(RgbaImage, u32, u32)> {
         })
         .collect();
     Ok((
-        RgbaImage::from_raw(width, height, rgba).context("SVG 像素无效")?,
+        RgbaImage::from_raw(width, height, rgba).context(messages().svg_pixels())?,
         original.width(),
         original.height(),
     ))
@@ -181,7 +180,10 @@ impl ImageDiff {
             .min_h_0()
             .w_full()
             .overflow_hidden()
-            .child(self.original.view("image-original", "修改前", cx))
+            .child(
+                self.original
+                    .view("image-original", messages().before(), cx),
+            )
             .child(
                 div()
                     .w(px(1.))
@@ -189,7 +191,7 @@ impl ImageDiff {
                     .flex_shrink_0()
                     .bg(cx.theme().border),
             )
-            .child(self.modified.view("image-modified", "修改后", cx))
+            .child(self.modified.view("image-modified", messages().after(), cx))
     }
 }
 
@@ -218,7 +220,7 @@ impl ImageSide {
                     preview.height,
                     bytes,
                     if preview.first_frame {
-                        " · 首帧"
+                        messages().first_frame()
                     } else {
                         ""
                     },
@@ -231,7 +233,7 @@ impl ImageSide {
                     .child(image_canvas(preview.pixels.clone(), cx))
                     .into_any_element()
             }
-            Self::Missing => empty_side("此版本中不存在此图片".into(), cx),
+            Self::Missing => empty_side(messages().missing_image().into(), cx),
             Self::Error(message) => empty_side(message.clone(), cx),
         };
         v_flex()
@@ -295,7 +297,7 @@ fn image_canvas(pixels: Arc<RenderImage>, cx: &App) -> impl IntoElement {
             if let Err(error) =
                 window.paint_image(area, fitted, Default::default(), pixels.clone(), 0, false)
             {
-                tracing::warn!("图片预览绘制失败：{error}");
+                tracing::warn!("{}", messages().draw_image_failed(error));
             }
         },
     )

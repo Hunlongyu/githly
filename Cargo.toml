@@ -1,6 +1,6 @@
 [package]
 name = "githly"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 
 [dependencies]
@@ -23,6 +23,7 @@ thiserror = "2"
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+sys-locale = "0.3.2"
 
 [features]
 default = []

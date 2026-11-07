@@ -1,4 +1,5 @@
 //! Release metadata and bounded downloads. All entry points run on a worker.
+use crate::i18n::messages;
 use anyhow::{Context, Result, bail, ensure};
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -18,7 +19,7 @@ struct Http;
 #[cfg(not(windows))]
 impl Fetch for Http {
     fn get(&mut self, _: &str, _: &mut dyn Write, _: u64) -> Result<Response> {
-        bail!("自动更新目前仅支持 Windows")
+        bail!(messages().windows_updates())
     }
 }
 #[cfg(test)]
@@ -62,7 +63,7 @@ pub fn mirror_prefix(value: &str) -> Result<String> {
     if value.is_empty() {
         return Ok(String::new());
     }
-    let parsed = url::Url::parse(value).context("镜像地址无效")?;
+    let parsed = url::Url::parse(value).context(messages().invalid_mirror())?;
     ensure!(
         parsed.scheme() == "https"
             && parsed.host_str().is_some()
@@ -70,7 +71,7 @@ pub fn mirror_prefix(value: &str) -> Result<String> {
             && parsed.password().is_none()
             && parsed.query().is_none()
             && parsed.fragment().is_none(),
-        "镜像须为不带账户、查询参数的 HTTPS 前缀"
+        messages().mirror_https()
     );
     Ok(format!("{}/", parsed.as_str().trim_end_matches('/')))
 }
@@ -90,13 +91,30 @@ pub struct Manifest {
 #[derive(Clone, Debug)]
 pub struct Available {
     pub manifest: Manifest,
-    pub source: String,
+    pub source: Source,
     pub mirror: String,
 }
 #[derive(Debug)]
 pub struct Check {
     pub available: Option<Available>,
-    pub source: String,
+    pub source: Source,
+}
+
+#[derive(Clone, Debug)]
+pub enum Source {
+    GitHub,
+    Release,
+    Mirror(String),
+}
+
+impl std::fmt::Display for Source {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::GitHub => f.write_str("GitHub"),
+            Self::Release => f.write_str("GitHub Release"),
+            Self::Mirror(prefix) => f.write_str(&messages().mirror_source(prefix)),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -116,19 +134,19 @@ fn metadata(fetch: &mut impl Fetch, address: &str) -> Result<(Response, Vec<u8>)
 }
 
 fn validate(manifest: &Manifest) -> Result<Version> {
-    let version = Version::parse(&manifest.version).context("更新版本号无效")?;
+    let version = Version::parse(&manifest.version).context(messages().invalid_version())?;
     ensure!(
         version.pre.is_empty() && version.build.is_empty(),
-        "仅支持正式版本更新"
+        messages().stable_only()
     );
     ensure!(
         manifest.notes_url == format!("{RELEASES}/tag/v{version}"),
-        "更新说明地址不属于本项目"
+        messages().invalid_notes()
     );
     ensure!(
         manifest.installer.url
             == format!("{RELEASES}/download/v{version}/Githly-{version}-windows-x64-setup.exe"),
-        "安装包地址不属于本项目或版本不匹配"
+        messages().invalid_installer_url()
     );
     ensure!(
         manifest.installer.sha256.len() == 64
@@ -137,11 +155,11 @@ fn validate(manifest: &Manifest) -> Result<Version> {
                 .sha256
                 .bytes()
                 .all(|byte| byte.is_ascii_hexdigit()),
-        "安装包校验信息无效"
+        messages().invalid_checksum()
     );
     ensure!(
         (1..=MAX_INSTALLER).contains(&manifest.installer.size),
-        "安装包大小超出限制"
+        messages().installer_too_large()
     );
     Ok(version)
 }
@@ -170,8 +188,11 @@ fn check_with(
                     prerelease: bool,
                 }
                 let release: Release =
-                    serde_json::from_slice(&bytes).context("GitHub 版本信息格式无效")?;
-                ensure!(!release.draft && !release.prerelease, "尚无正式版本");
+                    serde_json::from_slice(&bytes).context(messages().invalid_release())?;
+                ensure!(
+                    !release.draft && !release.prerelease,
+                    messages().no_release()
+                );
                 let version = Version::parse(
                     release
                         .tag_name
@@ -181,7 +202,7 @@ fn check_with(
                 if version <= current {
                     return Ok(Check {
                         available: None,
-                        source: "GitHub".into(),
+                        source: Source::GitHub,
                     });
                 }
                 expected = Some(version);
@@ -217,26 +238,23 @@ fn check_with(
             used_mirror = true;
             metadata(fetch, &format!("{mirror}{direct}"))?
         }
-        Ok((response, _)) => bail!(
-            "更新源暂不可用（HTTP {}）；尚未发布时也可能出现此提示",
-            response.status
-        ),
+        Ok((response, _)) => bail!(messages().release_unavailable(response.status)),
         Err(error) => return Err(error),
     };
     ensure!(
         response.status == 200,
-        "更新源暂不可用（HTTP {}）",
-        response.status
+        messages().source_unavailable(response.status)
     );
-    let manifest: Manifest = serde_json::from_slice(&bytes).context("更新清单格式无效")?;
+    let manifest: Manifest =
+        serde_json::from_slice(&bytes).context(messages().invalid_manifest())?;
     let version = validate(&manifest)?;
     if let Some(expected) = expected {
-        ensure!(version == expected, "镜像版本尚未同步，请稍后重试");
+        ensure!(version == expected, messages().mirror_outdated());
     }
     let source = if used_mirror {
-        format!("镜像：{mirror}")
+        Source::Mirror(mirror.clone())
     } else {
-        "GitHub Release".into()
+        Source::Release
     };
     Ok(Check {
         available: (version > current).then(|| Available {
@@ -250,7 +268,7 @@ fn check_with(
 
 pub fn download(available: &Available) -> Result<PathBuf> {
     let directory = directories::BaseDirs::new()
-        .context("无法定位更新缓存目录")?
+        .context(messages().update_cache_dir())?
         .cache_dir()
         .join("githly")
         .join("updates");
@@ -276,7 +294,7 @@ fn download_with(
     let mirrored = format!("{mirror}{direct}");
     let urls: Vec<&str> = if mirror.is_empty() {
         vec![direct]
-    } else if available.source.starts_with("镜像：") {
+    } else if matches!(available.source, Source::Mirror(_)) {
         vec![&mirrored, direct]
     } else {
         vec![direct, &mirrored]
@@ -285,21 +303,20 @@ fn download_with(
     // files prevent a second application instance from sharing an active writer.
     let partial = PartialFile(directory.join(format!("installer-{}.part", std::process::id())));
     let destination = directory.join("Githly-update.exe");
-    let mut error = anyhow::anyhow!("安装包下载失败");
+    let mut error = anyhow::anyhow!(messages().installer_failed());
     for url in urls {
         let result = (|| {
             let mut file = File::create(&partial.0)?;
             let response = fetch.get(url, &mut file, available.manifest.installer.size)?;
             ensure!(
                 response.status == 200,
-                "下载失败（HTTP {}）",
-                response.status
+                messages().download_http(response.status)
             );
             file.sync_all()?;
             drop(file);
             verify_file(&partial.0, &available.manifest.installer)?;
             if destination.exists() {
-                std::fs::remove_file(&destination).context("旧安装包正在使用，请稍后重试")?;
+                std::fs::remove_file(&destination).context(messages().installer_in_use())?;
             }
             std::fs::rename(&partial.0, &destination)?;
             Ok(destination.clone())
@@ -317,7 +334,7 @@ pub fn verify_file(path: &Path, installer: &Installer) -> Result<()> {
     let mut file = File::open(path)?;
     ensure!(
         file.metadata()?.len() == installer.size,
-        "安装包不完整或大小不匹配"
+        messages().installer_incomplete()
     );
     let mut digest = Sha256::new();
     let mut buffer = [0u8; 64 * 1024];
@@ -335,7 +352,7 @@ pub fn verify_file(path: &Path, installer: &Installer) -> Result<()> {
         .collect();
     ensure!(
         actual.eq_ignore_ascii_case(&installer.sha256),
-        "安装包 SHA-256 校验失败"
+        messages().checksum_failed()
     );
     Ok(())
 }
@@ -353,6 +370,6 @@ pub fn install(path: &Path, installer: &Installer) -> Result<()> {
     }
     command
         .spawn()
-        .context("无法启动安装程序，当前版本仍可使用")?;
+        .context(messages().installer_launch_failed())?;
     Ok(())
 }

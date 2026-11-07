@@ -1,4 +1,5 @@
 use super::{Fetch, Response};
+use crate::i18n::messages;
 use anyhow::{Context, Result, ensure};
 use std::{
     ffi::c_void,
@@ -15,8 +16,7 @@ impl Handle {
     fn new(value: *mut c_void) -> Result<Self> {
         ensure!(
             !value.is_null(),
-            "网络连接失败：{}",
-            std::io::Error::last_os_error()
+            messages().connection_failed(std::io::Error::last_os_error())
         );
         Ok(Self(value))
     }
@@ -35,8 +35,7 @@ fn wide(value: &str) -> Vec<u16> {
 fn succeeded(value: i32) -> Result<()> {
     ensure!(
         value != 0,
-        "网络请求失败：{}",
-        std::io::Error::last_os_error()
+        messages().request_failed(std::io::Error::last_os_error())
     );
     Ok(())
 }
@@ -70,9 +69,9 @@ impl Fetch for Http {
         let url = url::Url::parse(address)?;
         ensure!(
             url.scheme() == "https" && url.username().is_empty() && url.password().is_none(),
-            "更新连接必须使用 HTTPS"
+            messages().https_required()
         );
-        let host = wide(url.host_str().context("缺少服务器地址")?);
+        let host = wide(url.host_str().context(messages().missing_host())?);
         let path = wide(&format!(
             "{}{}",
             url.path(),
@@ -150,13 +149,13 @@ impl Fetch for Http {
                 return Ok(response);
             }
             if let Some(length) = header(&request, "Content-Length") {
-                ensure!(length <= limit, "更新文件超过大小限制");
+                ensure!(length <= limit, messages().update_size_limit());
             }
             let mut buffer = [0u8; 64 * 1024];
             let mut total = 0u64;
             let budget = Duration::from_secs(if limit <= 1024 * 1024 { 45 } else { 600 });
             loop {
-                ensure!(start.elapsed() < budget, "更新请求超时");
+                ensure!(start.elapsed() < budget, messages().request_timeout());
                 let mut read = 0;
                 succeeded(WinHttpReadData(
                     request.0,
@@ -168,7 +167,7 @@ impl Fetch for Http {
                     break;
                 }
                 total += u64::from(read);
-                ensure!(total <= limit, "更新文件超过大小限制");
+                ensure!(total <= limit, messages().update_size_limit());
                 output.write_all(&buffer[..read as usize])?;
             }
             Ok(response)

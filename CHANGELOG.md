@@ -1,5 +1,17 @@
 # 更新日志
 
+## v0.1.1 · 2026-11-07
+
+- 界面支持简体中文和英文，默认跟随系统语言。在「设置 → 语言」中可手动选择，重启后生效。
+- 自动刷新合并了重复的 Git 状态查询，构建提交图时减少了复制。大型标签列表改为流式读取，连续输入历史搜索时可取消旧查询。
+- 切换分支前的检查更轻量。切换浏览范围会清除旧刷新错误，读取 worktree 列表失败时会显示原因。未跟踪文件统计也限制了文件系统查询次数。
+
+**English**
+
+- Githly now supports English and Simplified Chinese and follows your system language preferences by default. Choose a language in Settings → Language and restart to apply it.
+- Refresh now reads Git status once, graph layout uses fewer copies, and large tag lists are read incrementally. Typing a new history search cancels the previous scan.
+- Branch switching uses a lighter preflight check. Changing the history scope clears stale refresh errors, worktree lookup failures are visible, and untracked-file statistics limit filesystem queries.
+
 ## v0.1.0 · 2026-11-07
 
 Githly 首个正式版面向 Windows 10/11 x64，使用系统中已安装的 Git。

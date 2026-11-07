@@ -1,4 +1,5 @@
 use crate::app::GitPanel;
+use crate::i18n::messages;
 use anyhow::{Context as _, Result, bail, ensure};
 use async_channel::Sender;
 use gpui_kit::{App, WeakEntity, Window};
@@ -36,7 +37,7 @@ pub fn claim_or_forward(project: Option<&Path>) -> Result<Option<OwnedHandle>> {
     loop {
         let raw = unsafe { CreateMutexW(ptr::null(), 0, MUTEX) };
         if raw.is_null() {
-            return Err(io::Error::last_os_error()).context("无法创建 Githly 单实例锁");
+            return Err(io::Error::last_os_error()).context(messages().instance_lock());
         }
         let exists = unsafe { GetLastError() } == ERROR_ALREADY_EXISTS;
         let guard = unsafe { OwnedHandle::from_raw_handle(raw) };
@@ -51,10 +52,7 @@ pub fn claim_or_forward(project: Option<&Path>) -> Result<Option<OwnedHandle>> {
             forward(hwnd, project)?;
             return Ok(None);
         }
-        ensure!(
-            Instant::now() < deadline,
-            "已有 Githly 进程，但主窗口尚未就绪"
-        );
+        ensure!(Instant::now() < deadline, messages().instance_not_ready());
         std::thread::sleep(Duration::from_millis(50));
     }
 }
@@ -75,7 +73,7 @@ fn forward(hwnd: HWND, project: Option<&Path>) -> Result<()> {
         .as_os_str()
         .encode_wide()
         .collect();
-    ensure!(units.len() <= MAX_PATH_UNITS, "仓库路径过长");
+    ensure!(units.len() <= MAX_PATH_UNITS, messages().path_too_long());
     let packet = COPYDATASTRUCT {
         dwData: LAUNCH,
         cbData: (units.len() * 2) as u32,
@@ -96,19 +94,19 @@ fn forward(hwnd: HWND, project: Option<&Path>) -> Result<()> {
             &mut accepted,
         ) == 0
         {
-            return Err(io::Error::last_os_error()).context("已有 Githly 窗口未响应启动请求");
+            return Err(io::Error::last_os_error()).context(messages().instance_unresponsive());
         }
     }
-    ensure!(accepted == 1, "已有 Githly 窗口未接受启动请求");
+    ensure!(accepted == 1, messages().launch_rejected());
     Ok(())
 }
 
 pub fn listen(window: &Window, panel: WeakEntity<GitPanel>, cx: &mut App) -> Result<()> {
     let native = HasWindowHandle::window_handle(window)
         .ok()
-        .context("无法取得主窗口句柄")?;
+        .context(messages().window_handle())?;
     let RawWindowHandle::Win32(handle) = native.as_raw() else {
-        bail!("缺少 Win32 窗口句柄");
+        bail!(messages().no_win32_handle());
     };
     let hwnd = handle.hwnd.get() as HWND;
     let (tx, rx) = async_channel::bounded::<Option<PathBuf>>(32);
@@ -118,14 +116,14 @@ pub fn listen(window: &Window, panel: WeakEntity<GitPanel>, cx: &mut App) -> Res
     unsafe {
         if SetWindowSubclass(hwnd, Some(receive), LAUNCH, sender as usize) == 0 {
             drop(Box::from_raw(sender));
-            bail!("无法接收重复启动请求");
+            bail!(messages().receive_launch());
         }
         if SetPropW(hwnd, WINDOW_MARKER, hwnd) == 0 {
             let error = io::Error::last_os_error();
             if RemoveWindowSubclass(hwnd, Some(receive), LAUNCH) != 0 {
                 drop(Box::from_raw(sender));
             }
-            return Err(error).context("无法标记主窗口");
+            return Err(error).context(messages().mark_window());
         }
     }
     let window = window.window_handle();

@@ -1,4 +1,5 @@
 use super::*;
+use crate::i18n::messages;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Stash {
@@ -52,7 +53,7 @@ impl Git {
         let commit = parse_log(&output)
             .into_iter()
             .next()
-            .context("Stash 对象不可用")?;
+            .context(messages().stash_missing())?;
         let mut files = self.commit_files(root, id).await?;
         let untracked_revision = commit.parents.get(2).cloned();
         let mut untracked_paths = std::collections::HashSet::new();

@@ -55,6 +55,8 @@
 
 需要 **Windows 10 或 11（x64）** 和系统 **Git**。若 Githly 未在环境变量中检测到 Git，可在设置（`Ctrl+,`）中手动指定已有的 `git.exe`。
 
+Githly 默认按系统语言偏好顺序选择简体中文或英文，均不匹配时使用英文。在 **设置 → 语言** 中可手动切换，重启 Githly 后生效。
+
 前往 **[GitHub Releases 最新正式版](https://github.com/Hunlongyu/githly/releases/latest)** 选择安装包或便携 ZIP。每个正式版本均附带更新说明和 `SHA256SUMS.txt` 校验文件。
 
 | 版本类型 | 文件名后缀 | 启动与使用方式 |

@@ -1,5 +1,6 @@
 use super::controls;
 use crate::git::{Branch, HistoryScope};
+use crate::i18n::messages;
 use gpui_kit::component::{
     ActiveTheme, Icon, IconName, StyledExt, h_flex,
     input::{InputEvent, InputState},
@@ -65,7 +66,8 @@ pub(super) struct BranchPicker {
 
 impl BranchPicker {
     pub(super) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索分支"));
+        let search =
+            cx.new(|cx| InputState::new(window, cx).placeholder(messages().search_branches()));
         cx.subscribe(&search, |this, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
                 this.filter(cx);
@@ -125,9 +127,9 @@ impl BranchPicker {
                 let group = usize::from(remote);
                 let collapsed = self.collapsed[group];
                 let name = if remote {
-                    "远程分支"
+                    messages().remote_branches()
                 } else {
-                    "本地分支"
+                    messages().local_branches()
                 };
                 gpui_kit::base::Button::new(("branch-group", group))
                     .w_full()
@@ -141,9 +143,14 @@ impl BranchPicker {
                     .font_semibold()
                     .text_color(cx.theme().muted_foreground)
                     .hover(|style| style.bg(cx.theme().list_hover))
-                    .accessibility_label(format!(
-                        "{name}，{count} 个，{}",
-                        if collapsed { "已折叠" } else { "已展开" }
+                    .accessibility_label(messages().branch_group(
+                        name,
+                        count,
+                        if collapsed {
+                            messages().collapsed()
+                        } else {
+                            messages().expanded()
+                        },
                     ))
                     .child(
                         Icon::new(if collapsed {
@@ -204,13 +211,13 @@ impl BranchPicker {
                                 .text_size(px(11.))
                                 .flex_shrink_0()
                                 .text_color(cx.theme().muted_foreground)
-                                .child("当前"),
+                                .child(messages().current()),
                         )
                     })
                     .when(!branch.remote && !branch.current, |view| {
                         view.child(
                             controls::button(("checkout", index))
-                                .label("切换")
+                                .label(messages().switch())
                                 .on_click(cx.listener(move |_, _, _, cx| {
                                     cx.stop_propagation();
                                     cx.emit(BranchEvent::Switch(switch_name.clone()));
@@ -229,9 +236,9 @@ impl BranchPicker {
                 .text_size(px(12.))
                 .text_color(cx.theme().muted_foreground)
                 .child(if self.branches.is_empty() {
-                    "暂无分支"
+                    messages().no_branches()
                 } else {
-                    "没有匹配的分支"
+                    messages().no_matching_branches()
                 })
                 .into_any_element(),
         }
@@ -252,12 +259,20 @@ impl Render for BranchPicker {
                 h_flex()
                     .p_1()
                     .gap_1()
-                    .child(controls::button("browse-head").label("当前分支").on_click(
-                        cx.listener(|_, _, _, cx| cx.emit(BranchEvent::Browse(HistoryScope::Head))),
-                    ))
-                    .child(controls::button("browse-all").label("全部分支").on_click(
-                        cx.listener(|_, _, _, cx| cx.emit(BranchEvent::Browse(HistoryScope::All))),
-                    )),
+                    .child(
+                        controls::button("browse-head")
+                            .label(messages().current_branch())
+                            .on_click(cx.listener(|_, _, _, cx| {
+                                cx.emit(BranchEvent::Browse(HistoryScope::Head))
+                            })),
+                    )
+                    .child(
+                        controls::button("browse-all")
+                            .label(messages().all_branches())
+                            .on_click(cx.listener(|_, _, _, cx| {
+                                cx.emit(BranchEvent::Browse(HistoryScope::All))
+                            })),
+                    ),
             )
             .child(div().p(px(8.)).child(controls::search_input(&self.search)))
             .child(

@@ -55,6 +55,8 @@
 
 Requires **Windows 10 or 11 (x64)** and system **Git**. If Git is not detected automatically in `PATH`, you can specify an existing `git.exe` path in Settings (`Ctrl+,`).
 
+Githly uses the first supported language in your system preferences (English or Simplified Chinese), with English as the fallback. To override it, open **Settings → Language**, choose a language, and restart Githly.
+
 Download the latest installer or portable archive from **[GitHub Releases](https://github.com/Hunlongyu/githly/releases/latest)**. Every release includes changelog notes and `SHA256SUMS.txt` for checksum verification.
 
 | Edition | Artifact | How to Run |

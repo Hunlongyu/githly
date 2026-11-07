@@ -1,3 +1,4 @@
+use crate::i18n::messages;
 use anyhow::{Context, Result};
 use directories::BaseDirs;
 use serde::{Deserialize, Serialize};
@@ -31,6 +32,7 @@ pub struct Config {
     pub git_path: Option<PathBuf>,
     pub recent_projects: Vec<PathBuf>,
     pub appearance: Appearance,
+    pub language: crate::i18n::Language,
     pub motion: MotionPreference,
     pub history_display: HistoryDisplay,
     pub file_panel_width: f32,
@@ -67,6 +69,7 @@ impl Default for Config {
             git_path: None,
             recent_projects: Vec::new(),
             appearance: Appearance::System,
+            language: crate::i18n::Language::System,
             motion: MotionPreference::default(),
             history_display: HistoryDisplay::default(),
             file_panel_width: 292.,
@@ -91,7 +94,7 @@ pub struct ConfigStore {
 
 impl ConfigStore {
     pub fn for_app() -> Result<Self> {
-        let base = BaseDirs::new().context("无法定位 AppData 配置目录")?;
+        let base = BaseDirs::new().context(messages().config_dir_missing())?;
         Ok(Self {
             path: base.config_dir().join("githly").join("config.json"),
         })
@@ -104,24 +107,24 @@ impl ConfigStore {
                 return Ok(Config::default());
             }
             Err(error) => {
-                return Err(error).with_context(|| format!("无法读取 {}", self.path.display()));
+                return Err(error).with_context(|| messages().cannot_read(self.path.display()));
             }
         };
-        let config: Config =
-            serde_json::from_slice(&bytes).context("配置文件格式无效，原文件已保留")?;
-        anyhow::ensure!(
-            config.schema_version == 1,
-            "不支持此配置文件版本，原文件已保留"
-        );
+        let config: Config = serde_json::from_slice(&bytes).context(messages().invalid_config())?;
+        anyhow::ensure!(config.schema_version == 1, messages().unsupported_config());
         Ok(config)
     }
 
     pub fn save(&self, config: &Config) -> Result<()> {
-        let directory = self.path.parent().context("配置目录无效")?;
-        fs::create_dir_all(directory).context("无法创建 AppData 配置目录")?;
+        let directory = self
+            .path
+            .parent()
+            .context(messages().invalid_config_dir())?;
+        fs::create_dir_all(directory).context(messages().create_config_dir())?;
         let temporary = directory.join("config.json.tmp");
-        fs::write(&temporary, serde_json::to_vec_pretty(config)?).context("无法写入配置")?;
-        fs::rename(&temporary, &self.path).context("无法保存配置文件")?;
+        fs::write(&temporary, serde_json::to_vec_pretty(config)?)
+            .context(messages().write_config())?;
+        fs::rename(&temporary, &self.path).context(messages().save_config())?;
         Ok(())
     }
 }
@@ -141,6 +144,7 @@ mod tests {
         config.remember_project(Path::new("E:/项目"));
         store.save(&config).unwrap();
         config.appearance = Appearance::Dark;
+        config.language = crate::i18n::Language::English;
         config.motion = MotionPreference::Off;
         store.save(&config).unwrap();
         let restored = store.load().unwrap();
@@ -148,6 +152,7 @@ mod tests {
         assert_eq!(restored.recent_projects.len(), 1);
         assert_eq!(restored.recent_projects, [PathBuf::from("E:/项目")]);
         assert_eq!(restored.appearance, Appearance::Dark);
+        assert_eq!(restored.language, crate::i18n::Language::English);
         assert_eq!(restored.motion, MotionPreference::Off);
     }
     #[test]
@@ -187,6 +192,7 @@ mod tests {
         .unwrap();
         let mut config = store.load().unwrap();
         assert_eq!(config.motion, MotionPreference::Subtle);
+        assert_eq!(config.language, crate::i18n::Language::System);
         config.history_display.hash = true;
         store.save(&config).unwrap();
         let restored = store.load().unwrap();

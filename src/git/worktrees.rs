@@ -1,4 +1,5 @@
 use super::*;
+use crate::i18n::messages;
 
 #[derive(Clone)]
 pub struct Worktree {
@@ -19,8 +20,8 @@ impl Git {
             if let Some(path) = text.strip_prefix("worktree ") {
                 entries.push(Worktree {
                     path: PathBuf::from(path),
-                    branch: "分离 HEAD".into(),
-                    status: "未核对状态".into(),
+                    branch: messages().detached_head().into(),
+                    status: messages().status_unchecked().into(),
                     available: Path::new(path).is_dir(),
                 });
             } else if let Some(entry) = entries.last_mut() {
@@ -29,14 +30,14 @@ impl Git {
                 }
                 if text == "bare" {
                     entry.available = false;
-                    entry.branch = "裸仓库".into();
+                    entry.branch = messages().bare_repository().into();
                 }
                 if text.starts_with("locked") {
-                    entry.status = "已锁定".into();
+                    entry.status = messages().locked().into();
                 }
                 if text.starts_with("prunable") {
                     entry.available = false;
-                    entry.status = "目录不可用".into();
+                    entry.status = messages().directory_missing().into();
                 }
             }
         }
@@ -48,7 +49,8 @@ impl Git {
         // Only read status when the menu is opened, never every poll for
         // all worktrees. Keep serial I/O and a bounded number of queries.
         for entry in entries.iter_mut().filter(|entry| entry.available).take(64) {
-            let note = (entry.status != "未核对状态").then(|| entry.status.clone());
+            let note =
+                (entry.status != messages().status_unchecked()).then(|| entry.status.clone());
             let status = match self
                 .run(
                     Some(&entry.path),
@@ -59,12 +61,12 @@ impl Git {
                 Ok(output) => {
                     let count = parse_status(&output).len();
                     if count == 0 {
-                        "工作区干净".into()
+                        messages().clean_worktree().into()
                     } else {
-                        format!("{count} 项更改")
+                        messages().worktree_changes(count)
                     }
                 }
-                Err(error) => format!("不可读取：{error}"),
+                Err(error) => messages().unreadable(error),
             };
             entry.status = note.map_or_else(|| status.clone(), |note| format!("{note} · {status}"));
         }

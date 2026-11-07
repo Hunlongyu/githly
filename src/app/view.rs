@@ -1,6 +1,7 @@
 use super::controls;
 use super::file_list::grouped_file_indices;
 use super::*;
+use crate::i18n::messages;
 use gpui_kit::component::{
     Icon,
     resizable::{h_resizable, resizable_panel, v_resizable},
@@ -125,7 +126,7 @@ impl GitPanel {
                     .mb_2()
                     .text_sm()
                     .text_color(cx.theme().muted_foreground)
-                    .child("最近打开"),
+                    .child(messages().recent_projects()),
             );
         for (index, path) in self.config.recent_projects.iter().enumerate() {
             let target = path.clone();
@@ -161,13 +162,13 @@ impl GitPanel {
                 div()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child("尚未打开项目"),
+                    .child(messages().no_recent()),
             );
         } else {
             recent = recent.child(
                 controls::button("clear-recent")
                     .ghost()
-                    .label("清除最近记录")
+                    .label(messages().clear_recent())
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.config.recent_projects.clear();
                         this.save(cx);
@@ -198,12 +199,13 @@ impl GitPanel {
                         div()
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
-                            .child("查看本地更改与提交历史"),
+                            .child(messages().welcome()),
                     )
-                    .when(self.detecting, |view| view.child("正在检测系统 Git…"))
+                    .when(self.detecting, |view| {
+                        view.child(messages().detect_system_git())
+                    })
                     .when(self.git.is_none() && !self.detecting, |view| {
-                        view.child("尚未找到可用的 Git")
-                            .child(self.git_controls(cx))
+                        view.child(messages().no_git()).child(self.git_controls(cx))
                     })
                     .when(self.git.is_some(), |view| {
                         view.child(
@@ -223,12 +225,12 @@ impl GitPanel {
                                 .cursor_pointer()
                                 .hover(|style| style.bg(cx.theme().list_hover))
                                 .child(Icon::new(IconName::FolderOpen).size_6())
-                                .child(div().text_sm().font_medium().child("加载本地项目"))
+                                .child(div().text_sm().font_medium().child(messages().open_local()))
                                 .child(
                                     div()
                                         .text_xs()
                                         .text_color(cx.theme().muted_foreground)
-                                        .child("选择仓库文件夹，或将文件夹拖到这里"),
+                                        .child(messages().drop_repository()),
                                 )
                                 .on_click(
                                     cx.listener(|this, _, _, cx| this.choose_path(false, cx)),
@@ -239,7 +241,7 @@ impl GitPanel {
                         div()
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
-                            .child("打开本地仓库  Ctrl+O"),
+                            .child(messages().open_shortcut()),
                     ),
             )
             .child(recent)
@@ -365,13 +367,13 @@ impl GitPanel {
         let view = cx.entity().downgrade();
         let display = self.config.history_display.clone();
         controls::icon_button("history-options", IconName::Ellipsis)
-            .tooltip("历史显示配置")
+            .tooltip(messages().history_display())
             .dropdown_menu(move |mut menu, _, _| {
                 for (key, label, checked) in [
-                    (0, "显示提交哈希", display.hash),
-                    (1, "显示标签", display.tags),
-                    (2, "显示分支", display.branches),
-                    (3, "哈希、分支和标签显示在说明后面", display.metadata_after),
+                    (0, messages().show_hash(), display.hash),
+                    (1, messages().show_tags(), display.tags),
+                    (2, messages().show_branches(), display.branches),
+                    (3, messages().metadata_after(), display.metadata_after),
                 ] {
                     let view = view.clone();
                     if key == 3 {
@@ -449,14 +451,19 @@ impl GitPanel {
         let group = usize::from(untracked);
         let collapsed = self.collapsed_change_groups[group];
         let heading = if untracked {
-            "未跟踪"
+            messages().untracked()
         } else {
-            "已跟踪的更改"
+            messages().tracked()
         };
         gpui_kit::base::Button::new(("file-group", group))
-            .accessibility_label(format!(
-                "{heading}，{count} 个文件，{}",
-                if collapsed { "已折叠" } else { "已展开" }
+            .accessibility_label(messages().file_group(
+                heading,
+                count,
+                if collapsed {
+                    messages().collapsed()
+                } else {
+                    messages().expanded()
+                },
             ))
             .flex()
             .items_center()
@@ -596,7 +603,7 @@ impl GitPanel {
                             .child(
                                 Tab::new()
                                     .flex_1()
-                                    .label(format!("更改  {}", repo.changes.len())),
+                                    .label(messages().changes_tab(repo.changes.len())),
                             )
                             .child(
                                 Tab::new()
@@ -617,14 +624,14 @@ impl GitPanel {
                 let summary = if repo.changes.is_empty() {
                     None
                 } else if self.statistics_pending {
-                    Some("正在计算增删行数…".to_string())
+                    Some(messages().calculating_stats().to_string())
                 } else if self.statistics_error.is_some() {
-                    Some("统计暂不可用，稍后自动重试".into())
+                    Some(messages().stats_unavailable().into())
                 } else if stats.added == 0 && stats.removed == 0 {
-                    stats.incomplete.then(|| "部分文件无文本统计".into())
+                    stats.incomplete.then(|| messages().partial_stats().into())
                 } else {
                     let note = if stats.incomplete {
-                        " · 部分文件无文本统计"
+                        messages().partial_stats_suffix()
                     } else {
                         ""
                     };
@@ -638,9 +645,9 @@ impl GitPanel {
                                 ChangeScope::Working => 1,
                                 ChangeScope::Staged => 2,
                             })
-                            .child(Tab::new().label("全部"))
-                            .child(Tab::new().label("未暂存"))
-                            .child(Tab::new().label("已暂存"))
+                            .child(Tab::new().label(messages().all()))
+                            .child(Tab::new().label(messages().unstaged()))
+                            .child(Tab::new().label(messages().staged()))
                             .on_click(cx.listener(|this, index: &usize, _, cx| {
                                 this.change_scope = match index {
                                     1 => ChangeScope::Working,
@@ -721,7 +728,7 @@ impl GitPanel {
                         view.child(
                             div()
                                 .text_color(cx.theme().muted_foreground)
-                                .child("没有 Stash"),
+                                .child(messages().no_stashes()),
                         )
                     })
                     .into_any_element()
@@ -787,28 +794,27 @@ impl GitPanel {
                         div()
                             .text_sm()
                             .font_medium()
-                            .child(format!("历史 · {}", repo.history_scope.label())),
+                            .child(messages().history_scope(repo.history_scope.label())),
                     )
                     .child(
                         div()
                             .text_size(px(11.))
                             .text_color(cx.theme().muted_foreground)
-                            .child(format!(
-                                "已加载 {} 条{}",
+                            .child(messages().loaded_count(
                                 repo.commits.len(),
                                 if self.history_filtering {
-                                    " · 搜索中…"
+                                    messages().searching()
                                 } else if self.history_loading {
-                                    " · 加载中…"
+                                    messages().loading()
                                 } else if repo.history_pending {
-                                    " · 有新历史，回到顶部自动更新"
+                                    messages().new_history()
                                 } else if repo.history_complete {
-                                    " · 已到底"
+                                    messages().end_of_history()
                                 } else if !query_empty {
-                                    " · 搜索已加载记录"
+                                    messages().search_loaded()
                                 } else {
-                                    " · 向下滚动加载更多"
-                                }
+                                    messages().scroll_for_more()
+                                },
                             )),
                     )
                     .child(div().flex_1())
@@ -817,8 +823,8 @@ impl GitPanel {
                             .w(px(138.))
                             .flex_shrink_0()
                             .selected_index(usize::from(!graph))
-                            .child(Tab::new().flex_1().label("关系图"))
-                            .child(Tab::new().flex_1().label("列表"))
+                            .child(Tab::new().flex_1().label(messages().graph()))
+                            .child(Tab::new().flex_1().label(messages().list()))
                             .on_click(cx.listener(|this, index: &usize, _, cx| {
                                 let graph = *index == 0;
                                 if this.config.history_display.graph != graph {
@@ -845,9 +851,20 @@ impl GitPanel {
                     .border_b_1()
                     .border_color(cx.theme().border)
                     .child(div().w(px(graph_slot_width)).flex_shrink_0())
-                    .child(div().flex_1().mr_3().child("提交说明"))
-                    .child(div().w(px(100.)).mr_3().flex_shrink_0().child("作者"))
-                    .child(div().w(px(130.)).flex_shrink_0().child("提交时间")),
+                    .child(div().flex_1().mr_3().child(messages().commit_message()))
+                    .child(
+                        div()
+                            .w(px(100.))
+                            .mr_3()
+                            .flex_shrink_0()
+                            .child(messages().author()),
+                    )
+                    .child(
+                        div()
+                            .w(px(130.))
+                            .flex_shrink_0()
+                            .child(messages().commit_time()),
+                    ),
             )
             .child(
                 uniform_list(
@@ -956,29 +973,26 @@ impl GitPanel {
                         .py_1()
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
-                        .child(format!("继续读取历史失败，稍后自动重试：{error}")),
+                        .child(messages().history_retry(error)),
                 )
             });
         let selected = self.selected_commit.as_ref();
         let heading = selected
             .map(|c| c.subject.clone())
-            .unwrap_or_else(|| "本地更改".into());
+            .unwrap_or_else(|| messages().local_changes().into());
         let meta = selected
             .map(|c| {
-                format!(
-                    "{}   {}   {}   相对父提交 {}",
-                    c.short_id,
-                    c.author,
-                    c.date,
-                    c.parents.first().map(|s| &s[..7]).unwrap_or("空树")
+                messages().parent_comparison(
+                    &c.short_id,
+                    &c.author,
+                    &c.date,
+                    c.parents
+                        .first()
+                        .map(|s| &s[..7])
+                        .unwrap_or(messages().empty_tree()),
                 )
             })
-            .unwrap_or_else(|| {
-                format!(
-                    "{} · 打开时的快照；重新选择查看最新内容",
-                    self.detail_change_scope.label()
-                )
-            });
+            .unwrap_or_else(|| messages().snapshot(self.detail_change_scope.label()));
         let detail = v_flex()
             .size_full()
             .min_h_0()
@@ -1009,32 +1023,36 @@ impl GitPanel {
                                     .text_size(px(11.))
                                     .text_color(cx.theme().muted_foreground)
                                     .truncate()
-                                    .child(format!("{meta} · {} 个文件", self.files.len())),
+                                    .child(messages().detail_file_count(meta, self.files.len())),
                             ),
                     )
                     .when(selected.is_some() && !self.commit_body.is_empty(), |view| {
                         view.child(
                             controls::button("commit-message")
                                 .ghost()
-                                .label("完整说明")
+                                .label(messages().full_message())
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     let body = this.commit_body.clone();
                                     window.open_dialog(cx, move |dialog, _, _| {
-                                        dialog.title("提交说明").w(px(640.)).centered().child(
-                                            div()
-                                                .id("commit-body")
-                                                .max_h(px(420.))
-                                                .overflow_y_scroll()
-                                                .text_sm()
-                                                .child(body.clone()),
-                                        )
+                                        dialog
+                                            .title(messages().commit_message())
+                                            .w(px(640.))
+                                            .centered()
+                                            .child(
+                                                div()
+                                                    .id("commit-body")
+                                                    .max_h(px(420.))
+                                                    .overflow_y_scroll()
+                                                    .text_sm()
+                                                    .child(body.clone()),
+                                            )
                                     });
                                 })),
                         )
                     })
                     .child(
                         controls::icon_button("close-detail", IconName::Close)
-                            .tooltip("关闭详情")
+                            .tooltip(messages().close_details())
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.close_detail(cx);
                                 cx.notify();
@@ -1099,7 +1117,7 @@ impl GitPanel {
                                                     "previous-change",
                                                     IconName::ChevronUp,
                                                 )
-                                                .tooltip("上一处变化")
+                                                .tooltip(messages().previous_change())
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.diff.update(cx, |diff, cx| {
                                                         diff.previous_change(cx)
@@ -1111,7 +1129,7 @@ impl GitPanel {
                                                     "next-change",
                                                     IconName::ChevronDown,
                                                 )
-                                                .tooltip("下一处变化")
+                                                .tooltip(messages().next_change())
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.diff
                                                         .update(cx, |diff, cx| diff.next_change(cx))

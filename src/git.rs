@@ -1,3 +1,4 @@
+use crate::i18n::messages;
 use anyhow::{Context, Result, bail};
 use futures_lite::io::{AsyncRead, AsyncReadExt};
 use std::{
@@ -112,9 +113,9 @@ impl ChangeScope {
     }
     pub fn label(self) -> &'static str {
         match self {
-            Self::All => "HEAD → 工作区",
-            Self::Staged => "HEAD → 暂存区",
-            Self::Working => "暂存区 → 工作区",
+            Self::All => messages().head_to_worktree(),
+            Self::Staged => messages().head_to_index(),
+            Self::Working => messages().index_to_worktree(),
         }
     }
 }
@@ -122,8 +123,8 @@ impl ChangeScope {
 impl HistoryScope {
     pub fn label(&self) -> &str {
         match self {
-            Self::Head => "当前分支",
-            Self::All => "全部分支",
+            Self::Head => messages().current_branch(),
+            Self::All => messages().all_branches(),
             Self::Branch(name) => name
                 .strip_prefix("refs/heads/")
                 .or_else(|| name.strip_prefix("refs/remotes/"))
@@ -137,13 +138,11 @@ impl Git {
         let executable = if let Some(path) = configured {
             anyhow::ensure!(
                 path.is_absolute() && path.is_file(),
-                "Git 程序路径不存在：{}",
-                path.display()
+                messages().git_path_missing(path.display())
             );
             path
         } else {
-            find_on_path()
-                .context("未在系统 PATH 中找到 Git，请指定已有的 Git 程序或前往官网安装")?
+            find_on_path().context(messages().git_not_on_path())?
         };
         let name = executable
             .file_name()
@@ -151,7 +150,7 @@ impl Git {
             .unwrap_or_default();
         anyhow::ensure!(
             name.eq_ignore_ascii_case(if cfg!(windows) { "git.exe" } else { "git" }),
-            "请选择 Git 可执行文件，而不是 git-bash 或安装程序"
+            messages().select_git_binary()
         );
         let mut git = Self {
             executable,
@@ -161,7 +160,7 @@ impl Git {
         let version = String::from_utf8_lossy(&output).trim().to_string();
         anyhow::ensure!(
             version.starts_with("git version "),
-            "所选程序没有返回有效的 Git 版本"
+            messages().invalid_git_version()
         );
         git.version = version;
         Ok(git)
@@ -210,9 +209,9 @@ impl Git {
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
-        let mut child = command.spawn().context("无法启动 Git 程序")?;
-        let stdout = child.stdout.take().context("无法读取 Git 输出")?;
-        let stderr = child.stderr.take().context("无法读取 Git 错误输出")?;
+        let mut child = command.spawn().context(messages().start_git())?;
+        let stdout = child.stdout.take().context(messages().read_git_output())?;
+        let stderr = child.stderr.take().context(messages().read_git_stderr())?;
         let (status, stdout, stderr) = futures_lite::future::race(
             async {
                 let (stdout, stderr) = futures_lite::future::try_zip(
@@ -224,7 +223,7 @@ impl Git {
             },
             async {
                 async_io::Timer::after(Duration::from_secs(20)).await;
-                bail!("Git 读取超时，请稍后重试")
+                bail!(messages().git_timeout())
             },
         )
         .await?;
@@ -238,7 +237,7 @@ impl Git {
         let root = self
             .run(Some(path), ["rev-parse", "--show-toplevel"])
             .await
-            .context("此目录不是可读取的 Git 工作目录")?;
+            .context(messages().invalid_repository())?;
         let root = PathBuf::from(String::from_utf8_lossy(&root).trim());
         self.read_repository(root, None, true, initial_limit).await
     }
@@ -282,11 +281,11 @@ impl Git {
                 ["status", "--porcelain=v1", "-z", "--untracked-files=normal"],
             )
             .await?;
-        anyhow::ensure!(status.is_empty(), "工作区或暂存区存在更改，暂不能切换分支");
+        anyhow::ensure!(status.is_empty(), messages().dirty_checkout());
         let git_dir = self.git_dir(root).await?;
         anyhow::ensure!(
             operation_states(&git_dir).is_empty(),
-            "仓库正在进行其他操作，暂不能切换分支"
+            messages().busy_checkout()
         );
         let reference = format!("refs/heads/{name}");
         let local = self
@@ -303,7 +302,7 @@ impl Git {
             .await?;
         anyhow::ensure!(
             local.strip_suffix(b"\0\n") == Some(reference.as_bytes()),
-            "仅支持切换已有本地分支"
+            messages().local_checkout_only()
         );
         // Writes are not subject to the read timeout/cancellation policy.
         let mut command = std::process::Command::new(&self.executable);
@@ -324,8 +323,8 @@ impl Git {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()?;
-        let stdout = child.stdout.take().context("无法读取 Git 输出")?;
-        let stderr = child.stderr.take().context("无法读取 Git 错误")?;
+        let stdout = child.stdout.take().context(messages().read_git_output())?;
+        let stderr = child.stderr.take().context(messages().read_git_error())?;
         let (_, stderr) =
             futures_lite::future::try_zip(drain_capped(stdout), drain_capped(stderr)).await?;
         let status = child.status().await?;
@@ -476,7 +475,7 @@ impl Git {
             && head.is_some()
             && !branches.iter().any(|branch| branch.current)
         {
-            "分离 HEAD".into()
+            messages().detached_head().into()
         } else {
             branch
         };
@@ -503,7 +502,7 @@ impl Git {
             .filter(|file| file.status.contains('U') || file.status == "AA" || file.status == "DD")
             .count();
         if conflicts > 0 {
-            operation_states.push(format!("{conflicts} 个冲突文件"));
+            operation_states.push(messages().conflicts(conflicts));
         }
         let (has_other_worktrees, worktree_error) = match self.worktree_entries(&root).await {
             Ok(entries) => (
@@ -584,10 +583,7 @@ impl Git {
             while !message.is_char_boundary(end) {
                 end -= 1;
             }
-            Ok(format!(
-                "{}\n\n[提交说明过长，仅显示前 64 KiB]",
-                &message[..end]
-            ))
+            Ok(messages().truncated_message(&message[..end]))
         } else {
             Ok(message.trim().to_string())
         }
@@ -612,12 +608,12 @@ impl Git {
             let fields: Vec<_> = std::str::from_utf8(header)?.split_whitespace().collect();
             anyhow::ensure!(
                 fields.len() == 3 && fields[2] == "0" && fields[0].starts_with("100"),
-                "暂存区图片存在冲突或不是普通文件"
+                messages().invalid_index_image()
             );
             let size = self.run(Some(root), ["cat-file", "-s", fields[1]]).await?;
             anyhow::ensure!(
                 std::str::from_utf8(&size)?.trim().parse::<u64>()? <= IMAGE_FILE_LIMIT,
-                "图片超过 8 MiB，暂不预览"
+                messages().image_too_large()
             );
             return self
                 .run(Some(root), ["cat-file", "blob", fields[1]])
@@ -639,11 +635,11 @@ impl Git {
             let fields: Vec<_> = header.split_whitespace().collect();
             anyhow::ensure!(
                 fields.len() == 4 && fields[0].starts_with("100") && fields[1] == "blob",
-                "该版本不是普通图片文件"
+                messages().invalid_image_version()
             );
             anyhow::ensure!(
                 fields[3].parse::<u64>()? <= IMAGE_FILE_LIMIT,
-                "图片超过 8 MiB，暂不预览"
+                messages().image_too_large()
             );
             self.run(Some(root), ["cat-file", "blob", fields[2]])
                 .await
@@ -654,12 +650,12 @@ impl Git {
             let metadata = match std::fs::symlink_metadata(&path) {
                 Ok(metadata) => metadata,
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-                Err(error) => return Err(error).context("无法读取图片文件"),
+                Err(error) => return Err(error).context(messages().read_image()),
             };
-            anyhow::ensure!(metadata.is_file(), "此路径不是普通图片文件");
+            anyhow::ensure!(metadata.is_file(), messages().invalid_image_path());
             anyhow::ensure!(
                 metadata.len() <= IMAGE_FILE_LIMIT,
-                "图片超过 8 MiB，暂不预览"
+                messages().image_too_large()
             );
             let mut bytes = Vec::new();
             std::fs::File::open(path)?
@@ -667,7 +663,7 @@ impl Git {
                 .read_to_end(&mut bytes)?;
             anyhow::ensure!(
                 bytes.len() as u64 <= IMAGE_FILE_LIMIT,
-                "图片超过 8 MiB，暂不预览"
+                messages().image_too_large()
             );
             Ok(Some(bytes))
         }
@@ -708,8 +704,8 @@ impl Git {
         } else if file.status == "??" {
             let path = root.join(&file.path);
             let metadata = std::fs::metadata(&path)?;
-            anyhow::ensure!(metadata.len() <= 1024 * 1024, "文件过大，暂不展开内容");
-            let text = std::fs::read_to_string(&path).context("此文件无法作为文本显示")?;
+            anyhow::ensure!(metadata.len() <= 1024 * 1024, messages().file_too_large());
+            let text = std::fs::read_to_string(&path).context(messages().non_text())?;
             let count = text.lines().count();
             return Ok(format!(
                 "diff --git a/{0} b/{0}\nnew file mode 100644\n--- /dev/null\n+++ b/{0}\n@@ -0,0 +1,{1} @@\n{2}",
@@ -746,7 +742,7 @@ impl Git {
             }
             self.run(Some(root), args).await?
         };
-        anyhow::ensure!(output.len() <= 2 * 1024 * 1024, "差异过大，暂不展开内容");
+        anyhow::ensure!(output.len() <= 2 * 1024 * 1024, messages().diff_too_large());
         Ok(String::from_utf8_lossy(&output).into())
     }
 
@@ -774,10 +770,7 @@ async fn drain_capped(mut reader: impl AsyncRead + Unpin) -> Result<Vec<u8>> {
 async fn read_limited(reader: impl AsyncRead + Unpin, limit: u64) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     reader.take(limit + 1).read_to_end(&mut bytes).await?;
-    anyhow::ensure!(
-        bytes.len() as u64 <= limit,
-        "Git 输出超过本轮读取上限，请缩小查看范围"
-    );
+    anyhow::ensure!(bytes.len() as u64 <= limit, messages().output_too_large());
     Ok(bytes)
 }
 
@@ -799,11 +792,14 @@ async fn read_refs(reader: impl AsyncRead + Unpin) -> Result<(Vec<u8>, [u8; 32])
         if count == 0 {
             break;
         }
-        anyhow::ensure!(count <= LIMIT, "单条 Git 引用超过 8 MiB");
+        anyhow::ensure!(count <= LIMIT, messages().ref_too_large());
         digest.update(&record);
         // Tags affect log decorations, but never appear in the branch picker or roots.
         if !record.starts_with(b"refs/tags/") {
-            anyhow::ensure!(branches.len() + count <= LIMIT, "Git 分支列表超过 8 MiB");
+            anyhow::ensure!(
+                branches.len() + count <= LIMIT,
+                messages().branches_too_large()
+            );
             branches.extend_from_slice(&record);
         }
     }
@@ -812,12 +808,12 @@ async fn read_refs(reader: impl AsyncRead + Unpin) -> Result<(Vec<u8>, [u8; 32])
 
 fn operation_states(git_dir: &Path) -> Vec<String> {
     [
-        ("MERGE_HEAD", "合并中"),
-        ("rebase-merge", "变基中"),
-        ("rebase-apply", "变基 / 应用补丁中"),
-        ("CHERRY_PICK_HEAD", "拣选中"),
-        ("REVERT_HEAD", "还原提交中"),
-        ("BISECT_LOG", "二分定位中"),
+        ("MERGE_HEAD", messages().merging()),
+        ("rebase-merge", messages().rebasing()),
+        ("rebase-apply", messages().applying_patch()),
+        ("CHERRY_PICK_HEAD", messages().cherry_picking()),
+        ("REVERT_HEAD", messages().reverting()),
+        ("BISECT_LOG", messages().bisecting()),
     ]
     .into_iter()
     .filter(|(marker, _)| git_dir.join(marker).exists())

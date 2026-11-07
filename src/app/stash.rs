@@ -1,4 +1,5 @@
 use super::*;
+use crate::i18n::messages;
 
 impl GitPanel {
     pub(super) fn select_stash(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -11,7 +12,7 @@ impl GitPanel {
         let Some(git) = self.git.clone() else { return };
         self.clear_detail(cx);
         self.detail_open = true;
-        self.diff_message = "正在读取 Stash…".into();
+        self.diff_message = messages().loading_stash().into();
         let generation = self.generation;
         let task = cx.background_spawn(async move { git.stash_detail(&root, &id).await });
         self.detail_task = Some(cx.spawn(async move |this, cx| {
@@ -34,7 +35,7 @@ impl GitPanel {
                         this.stash_untracked_paths = untracked_paths;
                         this.files = files;
                         if this.files.is_empty() {
-                            this.diff_message = "Stash 中没有文件变化".into();
+                            this.diff_message = messages().empty_stash().into();
                         } else {
                             this.select_file(0, cx);
                         }

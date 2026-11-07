@@ -1,4 +1,5 @@
 use super::*;
+use crate::i18n::messages;
 use gpui_kit::component::tooltip::Tooltip;
 
 pub(super) fn dropdown(git: Git, root: PathBuf, panel: WeakEntity<GitPanel>) -> impl IntoElement {
@@ -16,14 +17,14 @@ pub(super) fn dropdown(git: Git, root: PathBuf, panel: WeakEntity<GitPanel>) -> 
                 let result = query.await;
                 let _ = menu.update_in(cx, |menu, window, cx| {
                     menu.rebuild(window, cx, |mut menu, _, _| match result {
-                        Ok(entries) if entries.is_empty() => menu.label("没有可用的 worktree"),
+                        Ok(entries) if entries.is_empty() => menu.label(messages().no_worktrees()),
                         Ok(entries) => {
                             for entry in entries {
                                 menu = menu.item(worktree_item(entry, &root, panel.clone()));
                             }
                             menu
                         }
-                        Err(error) => menu.label(format!("读取 worktree 失败：{error:#}")),
+                        Err(error) => menu.label(messages().worktrees_failed(error)),
                     });
                 });
             });
@@ -31,7 +32,7 @@ pub(super) fn dropdown(git: Git, root: PathBuf, panel: WeakEntity<GitPanel>) -> 
             menu.min_w(px(400.))
                 .max_w(px(520.))
                 .scrollable(true)
-                .label("正在读取 worktree…")
+                .label(messages().loading_worktrees())
         })
 }
 

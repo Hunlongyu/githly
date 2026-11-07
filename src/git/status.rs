@@ -1,4 +1,5 @@
 use super::*;
+use crate::i18n::messages;
 
 pub(super) struct Status {
     pub head: Option<String>,
@@ -18,8 +19,8 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Status> {
             branch = Some(String::from_utf8_lossy(value).into_owned());
         }
     }
-    let oid = oid.context("Git 未返回 HEAD 状态")?;
-    let branch = branch.context("Git 未返回分支名称")?;
+    let oid = oid.context(messages().missing_head())?;
+    let branch = branch.context(messages().missing_branch())?;
     let tracking = parse_tracking(bytes);
     let mut changes = Vec::new();
     while let Some(record) = records.next() {
@@ -40,19 +41,21 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Status> {
             b'1' => 9,
             b'2' => 10,
             b'u' => 11,
-            _ => bail!("无法识别 Git 文件状态"),
+            _ => bail!(messages().unknown_status()),
         };
         let mut parts = record.splitn(fields, |b| *b == b' ');
         let xy = parts
             .nth(1)
             .filter(|xy| xy.len() == 2)
-            .context("Git 文件状态不完整")?;
-        let path = parts.nth(fields - 3).context("Git 文件路径不完整")?;
+            .context(messages().incomplete_status())?;
+        let path = parts
+            .nth(fields - 3)
+            .context(messages().incomplete_path())?;
         let original_path = if record[0] == b'2' {
             let original = records
                 .next()
                 .filter(|p| !p.is_empty())
-                .context("Git 重命名路径不完整")?;
+                .context(messages().incomplete_rename())?;
             Some(String::from_utf8_lossy(original).into_owned())
         } else {
             None

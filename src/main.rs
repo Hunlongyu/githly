@@ -1,9 +1,12 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
+use crate::i18n::messages;
+
 mod app;
 mod config;
 mod git;
 mod graph;
+mod i18n;
 mod motion;
 #[cfg(windows)]
 mod single_instance;
@@ -16,7 +19,7 @@ use gpui_kit::*;
 
 fn main() -> anyhow::Result<()> {
     let log_dir = directories::BaseDirs::new()
-        .ok_or_else(|| anyhow::anyhow!("无法定位 AppData"))?
+        .ok_or_else(|| anyhow::anyhow!(messages().appdata_missing()))?
         .data_local_dir()
         .join("githly")
         .join("logs");
@@ -33,6 +36,12 @@ fn main() -> anyhow::Result<()> {
     std::panic::set_hook(Box::new(|panic| {
         tracing::error!("{panic}");
     }));
+    let store = ConfigStore::for_app()?;
+    let (config, error) = match store.load() {
+        Ok(config) => (config, None),
+        Err(error) => (Default::default(), Some(format!("{error:#}"))),
+    };
+    i18n::init(config.language);
     let initial_project = std::env::args_os().nth(1).map(std::path::PathBuf::from);
     #[cfg(windows)]
     let Some(_instance_guard) = single_instance::claim_or_forward(initial_project.as_deref())
@@ -40,13 +49,9 @@ fn main() -> anyhow::Result<()> {
     else {
         return Ok(());
     };
-    let store = ConfigStore::for_app()?;
-    let (config, error) = match store.load() {
-        Ok(config) => (config, None),
-        Err(error) => (Default::default(), Some(format!("{error:#}"))),
-    };
     application().with_assets(assets::Assets).run(move |cx| {
         init(cx);
+        gpui_kit::component::set_locale(i18n::messages().tag());
         motion::init(config.motion, cx);
         cx.bind_keys([
             KeyBinding::new("ctrl-o", app::OpenProject, None),
@@ -78,11 +83,11 @@ fn main() -> anyhow::Result<()> {
                 });
                 #[cfg(windows)]
                 single_instance::listen(window, panel.downgrade(), cx)
-                    .expect("无法注册 Githly 启动请求");
+                    .unwrap_or_else(|error| panic!("{}: {error:#}", messages().register_launch()));
                 panel
             },
         )
-        .expect("无法创建 Githly 窗口");
+        .unwrap_or_else(|error| panic!("{}: {error:#}", messages().create_window()));
         cx.activate(true);
     });
     Ok(())

@@ -1,3 +1,4 @@
+use crate::i18n::messages;
 use crate::{
     config::{Appearance, Config, ConfigStore},
     git::{ChangeScope, ChangedFile, Commit, Git, Repository},
@@ -118,9 +119,10 @@ impl GitPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let file_search = cx.new(|cx| InputState::new(window, cx).placeholder("按路径筛选更改"));
+        let file_search =
+            cx.new(|cx| InputState::new(window, cx).placeholder(messages().filter_paths()));
         let history_search =
-            cx.new(|cx| InputState::new(window, cx).placeholder("搜索说明、作者、哈希"));
+            cx.new(|cx| InputState::new(window, cx).placeholder(messages().search_history()));
         cx.subscribe(&file_search, |_, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
                 cx.notify();
@@ -233,7 +235,7 @@ impl GitPanel {
             let task = executor.spawn(async move { store.save(&config) });
             if let Err(error) = task.await {
                 let _ = this.update(cx, |this, cx| {
-                    this.error = Some(format!("保存配置失败：{error:#}"));
+                    this.error = Some(messages().save_failed(error));
                     cx.notify();
                 });
             }
@@ -277,9 +279,9 @@ impl GitPanel {
             multiple: false,
             prompt: Some(
                 if executable {
-                    "选择 git.exe"
+                    messages().choose_git_exe()
                 } else {
-                    "加载项目"
+                    messages().open_project()
                 }
                 .into(),
             ),
@@ -400,7 +402,7 @@ impl GitPanel {
         self.clear_detail(cx);
         self.selected_commit = Some(commit.clone());
         self.detail_open = true;
-        self.diff_message = "正在读取文件…".into();
+        self.diff_message = messages().loading_files().into();
         let generation = self.generation;
         let task = cx.background_spawn(async move {
             let files = git.commit_files(&root, &commit.id).await?;
@@ -418,7 +420,7 @@ impl GitPanel {
                         this.commit_body = body;
                         this.files = files;
                         if this.files.is_empty() {
-                            this.diff_message = "此次提交没有文件差异".into();
+                            this.diff_message = messages().commit_no_diff().into();
                         } else {
                             this.select_file(0, cx);
                         }
@@ -485,7 +487,7 @@ impl GitPanel {
             return;
         };
         self.selected_file = Some(index);
-        self.diff_message = "正在读取差异…".into();
+        self.diff_message = messages().loading_diff().into();
         self.clear_image_diff(cx);
         self.diff.update(cx, |diff, cx| diff.set_files([], cx));
         let generation = self.generation;
@@ -527,7 +529,7 @@ impl GitPanel {
                     }
                     Ok(diff_data::Content::Text(files)) => {
                         this.diff_message = if files.is_empty() {
-                            "没有可显示的文本差异".into()
+                            messages().no_text_diff().into()
                         } else {
                             String::new()
                         };
@@ -568,7 +570,7 @@ impl GitPanel {
             .gap_2()
             .child(
                 controls::button("detect-git")
-                    .label("重新检测")
+                    .label(messages().detect_again())
                     .disabled(self.detecting)
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.detect_git(this.config.git_path.clone(), false, cx)
@@ -576,14 +578,14 @@ impl GitPanel {
             )
             .child(
                 controls::button("choose-git")
-                    .label("选择 Git 程序…")
+                    .label(messages().choose_git())
                     .disabled(self.detecting)
                     .on_click(cx.listener(|this, _, _, cx| this.choose_path(true, cx))),
             )
             .child(
                 controls::button("git-website")
                     .ghost()
-                    .label("Git 官网")
+                    .label(messages().git_website())
                     .on_click(|_, _, cx| cx.open_url("https://git-scm.com/install/")),
             )
     }
@@ -616,10 +618,9 @@ impl Render for GitPanel {
                             .to_string_lossy()
                             .to_string(),
                     )
-                    .tooltip(format!(
-                        "{}\n自动核对本地状态 · 上次读取 {}",
+                    .tooltip(messages().last_read(
                         repository.root.display(),
-                        self.last_read.as_deref().unwrap_or("—")
+                        self.last_read.as_deref().unwrap_or("—"),
                     ))
                     .dropdown_menu(move |menu, _, _| {
                         let open = view.clone();
@@ -629,7 +630,7 @@ impl Render for GitPanel {
                             .max_w(px(460.))
                             .max_h(px(420.))
                             .scrollable(true)
-                            .label("最近打开");
+                            .label(messages().recent_projects());
                         for project in &recent_projects {
                             let current = *project == root;
                             let target = project.clone();
@@ -648,27 +649,29 @@ impl Render for GitPanel {
                             );
                         }
                         menu.separator()
-                            .item(
-                                PopupMenuItem::new("加载其他项目…").on_click(move |_, _, cx| {
+                            .item(PopupMenuItem::new(messages().open_another()).on_click(
+                                move |_, _, cx| {
                                     let _ = open.update(cx, |this, cx| this.choose_path(false, cx));
-                                }),
-                            )
-                            .item(
-                                PopupMenuItem::new("清除最近记录").on_click(move |_, _, cx| {
+                                },
+                            ))
+                            .item(PopupMenuItem::new(messages().clear_recent()).on_click(
+                                move |_, _, cx| {
                                     let _ = clear.update(cx, |this, cx| {
                                         this.config.recent_projects.clear();
                                         this.save(cx);
                                         cx.notify();
                                     });
-                                }),
-                            )
+                                },
+                            ))
                             .separator()
-                            .item(PopupMenuItem::new("关闭项目").on_click(move |_, _, cx| {
-                                let _ = close.update(cx, |this, cx| {
-                                    this.release_project(cx);
-                                    cx.notify();
-                                });
-                            }))
+                            .item(PopupMenuItem::new(messages().close_project()).on_click(
+                                move |_, _, cx| {
+                                    let _ = close.update(cx, |this, cx| {
+                                        this.release_project(cx);
+                                        cx.notify();
+                                    });
+                                },
+                            ))
                     }),
             ));
             if repository.has_other_worktrees
@@ -706,18 +709,16 @@ impl Render for GitPanel {
                 Some(tracking) => match tracking.counts {
                     Some((ahead, behind)) => (
                         format!("{}  ↑{} ↓{}", tracking.upstream, ahead, behind),
-                        format!(
-                            "待推送 {ahead} 个提交 · 待拉取 {behind} 个提交\n基于本地远程跟踪记录，不自动连接远程"
-                        ),
+                        messages().upstream_counts(ahead, behind),
                     ),
                     None => (
                         format!("{}  ↑— ↓—", tracking.upstream),
-                        "上游跟踪记录在本地不可用，暂时无法计算提交数量".into(),
+                        messages().upstream_missing().into(),
                     ),
                 },
                 None => (
-                    "未设置上游".into(),
-                    "当前分支没有上游跟踪关系，无法计算待推送与待拉取数量".into(),
+                    messages().no_upstream().into(),
+                    messages().no_upstream_tip().into(),
                 ),
             };
             title = title.child(
@@ -751,21 +752,21 @@ impl Render for GitPanel {
                         IconName::Moon
                     },
                 )
-                .accessibility_label("切换明暗主题")
+                .accessibility_label(messages().toggle_theme())
                 .tooltip(if cx.theme().mode.is_dark() {
-                    "切换为浅色"
+                    messages().switch_light()
                 } else {
-                    "切换为深色"
+                    messages().switch_dark()
                 })
                 .on_click(cx.listener(|this, _, window, cx| this.theme(window, cx))),
             ))
             .child(title_control(
                 controls::icon_button("settings", IconName::Settings)
-                    .accessibility_label("设置")
+                    .accessibility_label(messages().settings())
                     .tooltip(if self.updates.available.is_some() {
-                        "有可用更新 · 设置  Ctrl+,"
+                        messages().update_available_tip()
                     } else {
-                        "设置  Ctrl+,"
+                        messages().settings_shortcut()
                     })
                     .on_click(cx.listener(|this, _, window, cx| this.open_settings(window, cx))),
             ));
@@ -874,7 +875,13 @@ impl Render for GitPanel {
             .text_color(cx.theme().foreground)
             .child(title_bar::title_bar(title, window, cx))
             .when(self.switching_branch, |view| {
-                view.child(div().px_3().py_1().text_xs().child("正在切换分支…"))
+                view.child(
+                    div()
+                        .px_3()
+                        .py_1()
+                        .text_xs()
+                        .child(messages().switching_branch()),
+                )
             })
             .when_some(self.refresh_error.clone(), |view, error| {
                 view.child(
@@ -883,7 +890,7 @@ impl Render for GitPanel {
                         .py_1()
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
-                        .child(format!("自动刷新暂不可用，保留上次内容并稍后重试：{error}")),
+                        .child(messages().refresh_failed(error)),
                 )
             })
             .when_some(
@@ -897,7 +904,7 @@ impl Render for GitPanel {
                             .py_1()
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
-                            .child(format!("读取 worktree 列表失败，稍后自动重试：{error}")),
+                            .child(messages().worktree_retry(error)),
                     )
                 },
             )
@@ -920,7 +927,7 @@ impl Render for GitPanel {
                 )
             })
             .when(self.loading, |this| {
-                this.child(div().p_4().child("正在读取项目…"))
+                this.child(div().p_4().child(messages().loading_project()))
             })
             .child(if self.repository.is_some() {
                 self.workspace(window, cx)

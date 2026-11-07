@@ -63,7 +63,7 @@ fn manifest(version: &str, content: &[u8]) -> Vec<u8> {
 fn available(content: &[u8]) -> Available {
     Available {
         manifest: serde_json::from_slice(&manifest("0.2.0", content)).unwrap(),
-        source: "GitHub Release".into(),
+        source: Source::Release,
         mirror: String::new(),
     }
 }
@@ -102,7 +102,7 @@ fn new_release_uses_matching_manifest_and_rejects_stale_mirror() {
         check_with(&mut fetch, &mut preferences, "0.1.0", 1000)
             .unwrap_err()
             .to_string()
-            .contains("尚未同步")
+            .contains(messages().mirror_outdated())
     );
 }
 
@@ -120,7 +120,7 @@ fn rate_limit_uses_release_mirror_and_honors_server_cooldown() {
             reply(&address, 200, manifest("0.2.0", b"exe")),
         ]);
         let result = check_with(&mut fetch, &mut preferences, "0.1.0", 1000).unwrap();
-        assert!(result.source.starts_with("镜像："));
+        assert!(matches!(result.source, Source::Mirror(_)));
         assert_eq!(preferences.api_retry_after, 1500);
         let mut fetch = Mock::new(vec![reply(&address, 200, manifest("0.2.0", b"exe"))]);
         check_with(&mut fetch, &mut preferences, "0.1.0", 1100).unwrap();
