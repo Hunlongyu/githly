@@ -6,8 +6,16 @@ stage=$(mktemp -d)
 trap 'rm -rf -- "$stage"' EXIT
 git init -q "$stage/repo"
 case "$platform" in
-    linux-x64)
-        dpkg-deb -x dist/"$platform"/*.deb "$stage/root"
+    linux-x64|linux-x64-appimage)
+        if [[ $platform == linux-x64-appimage ]]; then
+            images=(dist/"$platform"/*.AppImage)
+            [[ ${#images[@]} == 1 && -x ${images[0]} ]]
+            executable=${images[0]}
+            export APPIMAGE_EXTRACT_AND_RUN=1
+        else
+            dpkg-deb -x dist/"$platform"/*.deb "$stage/root"
+            executable="$stage/root/usr/bin/githly"
+        fi
         export XDG_RUNTIME_DIR="$stage/runtime" XDG_CONFIG_HOME="$stage/config" XDG_DATA_HOME="$stage/data"
         mkdir -m 700 "$XDG_RUNTIME_DIR"
         xvfb-run -a dbus-run-session -- bash -eu -c '
@@ -24,7 +32,7 @@ case "$platform" in
                 sleep 1
             done
             exit 1
-        ' smoke "$stage/root/usr/bin/githly" "$stage/repo"
+        ' smoke "$executable" "$stage/repo"
         ;;
     macos-*)
         hdiutil attach -quiet -readonly -nobrowse -mountpoint "$stage/mount" dist/"$platform"/*.dmg

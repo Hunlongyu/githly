@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-platform=${1:?Expected linux-x64, macos-x64 or macos-arm64}
+platform=${1:?Expected linux-x64, linux-x64-appimage, macos-x64 or macos-arm64}
 version=$(cargo metadata --locked --no-deps --format-version 1 | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"]=="githly"))')
 if [[ ${GITHUB_REF_TYPE:-} == tag && ${GITHUB_REF_NAME:-} != "v$version" ]]; then
     echo "Git tag must match Cargo version $version" >&2
@@ -33,6 +33,27 @@ Recommends: mesa-vulkan-drivers, xdg-desktop-portal
 Description: Desktop Git repository browser
 EOF
         dpkg-deb --root-owner-group --build "$root" "$out/$name"
+        ;;
+    'linux-x64-appimage:Linux x86_64')
+        name="Githly-$version-linux-x64.AppImage"
+        appdir="$stage/Githly.AppDir"
+        mkdir -p "$appdir/usr/share/doc/githly"
+        cp vendor/gpui-component/LICENSE-APACHE "$appdir/usr/share/doc/githly/"
+        cp assets/branding/githly-256.png "$stage/githly.png"
+        curl --fail --location --retry 3 --output "$stage/linuxdeploy" \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20251107-1/linuxdeploy-x86_64.AppImage
+        curl --fail --location --retry 3 --output "$stage/runtime" \
+            https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64
+        (cd "$stage" && sha256sum --check <<'SUMS'
+c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d  linuxdeploy
+2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d  runtime
+SUMS
+        )
+        chmod +x "$stage/linuxdeploy"
+        export APPIMAGE_EXTRACT_AND_RUN=1 LDAI_RUNTIME_FILE="$stage/runtime"
+        export LDAI_OUTPUT="$out/$name" LDAI_VERSION="$version"
+        "$stage/linuxdeploy" --appdir "$appdir" --executable "$binary" \
+            --desktop-file assets/linux/githly.desktop --icon-file "$stage/githly.png" --output appimage
         ;;
     'macos-arm64:Darwin arm64'|'macos-x64:Darwin x86_64')
         name="Githly-$version-$platform.dmg"

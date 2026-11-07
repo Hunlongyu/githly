@@ -65,6 +65,7 @@ Githly 默认按系统语言偏好顺序选择简体中文或英文，均不匹�
 | **Windows x64 便携版** | `-windows-x64.zip` | 解压到任意目录，直接运行其中的 `Githly.exe`。 |
 | **macOS** | `-macos-arm64.dmg`（Apple Silicon）或 `-macos-x64.dmg`（Intel） | 打开 DMG，将 Githly 拖入「应用程序」。应用使用临时签名，尚未经过 Apple 公证。 |
 | **Ubuntu 24.04 amd64** | `-linux-x64.deb` | 在下载目录运行 `sudo apt install ./Githly-*-linux-x64.deb`，之后从应用菜单或通过 `githly /path/to/repository` 启动。需要 Vulkan 驱动和 X11 或 Wayland。 |
+| **Linux x86_64 AppImage**（CI 测试包，v0.1.2 后的正式版提供） | `-linux-x64.AppImage` | 运行 `chmod +x Githly-*-linux-x64.AppImage` 后直接启动文件。构建基线为 Ubuntu 22.04，需要系统 Git、Vulkan 驱动和 X11 或 Wayland。 |
 
 登录 GitHub 后，也可在 main 分支成功构建的 Artifacts 中下载测试包，保留 14 天。[Windows 构建](https://github.com/Hunlongyu/githly/actions/workflows/windows.yml) · [macOS 和 Linux 构建](https://github.com/Hunlongyu/githly/actions/workflows/desktop.yml)
 

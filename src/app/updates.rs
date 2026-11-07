@@ -120,7 +120,7 @@ impl GitPanel {
         };
         self.updates.busy = true;
         self.updates.message = messages().opening_installer().into();
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         let portable = available.distribution == update::Distribution::Portable;
         let task = cx.background_spawn(async move { update::install(&path, &available) });
         self.updates.task = Some(cx.spawn(async move |this, cx| {
@@ -128,7 +128,7 @@ impl GitPanel {
             let _ = this.update(cx, |this, cx| {
                 this.updates.busy = false;
                 this.updates.message = match result {
-                    #[cfg(windows)]
+                    #[cfg(any(windows, target_os = "linux"))]
                     Ok(()) if portable => {
                         this.updates.restart_required = true;
                         messages().portable_updated().into()

@@ -32,6 +32,8 @@ cargo build --release --locked
 
 在对应平台运行 `cargo build --release --locked` 后，可用 `bash scripts/package-unix.sh <platform>` 生成同样的包。平台标识为 `macos-arm64`、`macos-x64`、`linux-x64`。Windows x64 客户端继续读取 `update.json`；新平台读取 `update-<platform>.json`，校验版本、下载地址、字节数和 SHA-256，用户点击安装后由系统打开相应包。
 
+从 v0.1.2 之后的正式版开始，Linux 下载栏同时提供 DEB 和 x86_64 AppImage。AppImage 的平台标识为 `linux-x64-appimage`。CI 在 Ubuntu 22.04 编译，校验固定版本的 linuxdeploy 和 AppImage runtime，并在 Ubuntu 及 Fedora 上启动同一个包。客户端使用 `update-linux-x64-appimage.json` 校验下载，在原文件所在目录完成替换，重启后使用新版本。
+
 ## 客户端检查与镜像
 
 每次启动自动检查一次，沿用服务端限流冷却时间。检测到新版本后在窗口右上角显示更新图标。

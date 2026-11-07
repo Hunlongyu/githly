@@ -65,6 +65,7 @@ Download the latest installer or portable archive from **[GitHub Releases](https
 | **Windows x64 portable ZIP** | `*-windows-x64.zip` | Extract the archive to any folder and run `Githly.exe`. |
 | **macOS** | `*-macos-arm64.dmg` (Apple Silicon) or `*-macos-x64.dmg` (Intel) | Mount the DMG and drag Githly to Applications. The app is ad-hoc signed and has not been notarized by Apple. |
 | **Ubuntu 24.04 amd64** | `*-linux-x64.deb` | Run `sudo apt install ./Githly-*-linux-x64.deb` in the download folder. Launch Githly from the app menu or run `githly /path/to/repository`. The desktop requires a Vulkan driver and X11 or Wayland. |
+| **Linux x86_64 AppImage** (CI, then releases after v0.1.2) | `*-linux-x64.AppImage` | Run `chmod +x Githly-*-linux-x64.AppImage`, then launch the file. Built on Ubuntu 22.04. Requires system Git, a Vulkan driver and X11 or Wayland. |
 
 Test packages from successful main-branch runs are available for 14 days to signed-in GitHub users. [Windows builds](https://github.com/Hunlongyu/githly/actions/workflows/windows.yml) · [macOS and Linux builds](https://github.com/Hunlongyu/githly/actions/workflows/desktop.yml)
 

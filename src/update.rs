@@ -17,6 +17,8 @@ mod http;
 #[path = "update/unix_http.rs"]
 mod http;
 use http::Http;
+#[cfg(target_os = "linux")]
+mod appimage;
 #[cfg(windows)]
 mod portable;
 #[cfg(test)]
@@ -41,7 +43,7 @@ const MIRRORS: &[&str] = &["https://gh-proxy.org/", "https://ghfast.top/"];
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Distribution {
     Native,
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     Portable,
 }
 
@@ -51,6 +53,10 @@ impl Distribution {
         if !portable::is_installed(&std::env::current_exe()?)? {
             return Ok(Self::Portable);
         }
+        #[cfg(target_os = "linux")]
+        if appimage::current_path()?.is_some() {
+            return Ok(Self::Portable);
+        }
         Ok(Self::Native)
     }
 
@@ -58,6 +64,10 @@ impl Distribution {
         #[cfg(windows)]
         if self == Self::Portable {
             return format!("update-{}-portable.json", platform_id());
+        }
+        #[cfg(target_os = "linux")]
+        if self == Self::Portable {
+            return format!("update-{}-appimage.json", platform_id());
         }
 
         // Keep the manifest URL used by already-installed Windows x64 clients.
@@ -76,7 +86,11 @@ impl Distribution {
             "-setup.exe"
         };
         #[cfg(target_os = "linux")]
-        let suffix = ".deb";
+        let suffix = if self == Self::Portable {
+            ".AppImage"
+        } else {
+            ".deb"
+        };
         #[cfg(target_os = "macos")]
         let suffix = ".dmg";
         format!("Githly-{version}-{}{suffix}", platform_id())
@@ -409,6 +423,11 @@ pub fn install(path: &Path, available: &Available) -> Result<()> {
     #[cfg(windows)]
     if distribution == Distribution::Portable {
         return portable::apply(path, &available.manifest.installer);
+    }
+    #[cfg(target_os = "linux")]
+    if distribution == Distribution::Portable {
+        let image = appimage::current_path()?.context(messages().invalid_installer_url())?;
+        return appimage::replace(&image, path, &available.manifest.installer);
     }
     verify_file(path, &available.manifest.installer)?;
     #[cfg(unix)]

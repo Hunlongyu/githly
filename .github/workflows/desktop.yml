@@ -18,6 +18,8 @@ jobs:
         include:
           - runner: ubuntu-24.04
             platform: linux-x64
+          - runner: ubuntu-22.04
+            platform: linux-x64-appimage
           - runner: macos-15
             platform: macos-arm64
           - runner: macos-15-intel
@@ -40,6 +42,8 @@ jobs:
           sudo apt-get install -y clang libfontconfig-dev libwayland-dev libxkbcommon-x11-dev libx11-xcb-dev libssl-dev libzstd-dev libasound2-dev libvulkan-dev libx11-dev libxi-dev libxrandr-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev mesa-vulkan-drivers xvfb xauth xdotool
       - run: rustup show
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.platform == 'linux-x64-appimage' && 'appimage-ubuntu-22.04' || '' }}
       - run: cargo fmt --all -- --check
       - run: cargo test --locked --features ui-tests -- --test-threads=1
       - run: cargo clippy --locked --all-targets --features ui-tests -- -D warnings
@@ -48,6 +52,16 @@ jobs:
         run: bash scripts/package-unix.sh "${{ matrix.platform }}"
       - name: Open packaged application
         run: bash scripts/smoke-unix.sh "${{ matrix.platform }}"
+      - name: Open the same AppImage on Fedora 44
+        if: matrix.platform == 'linux-x64-appimage'
+        run: |
+          docker run --rm \
+            -v "$PWD/dist/linux-x64-appimage:/work/dist/linux-x64-appimage:ro" \
+            -v "$PWD/scripts/smoke-unix.sh:/work/scripts/smoke-unix.sh:ro" \
+            fedora:44 bash -euc '
+              dnf -qy install git-core xorg-x11-server-Xvfb xdotool dbus-daemon mesa-vulkan-drivers libxkbcommon-x11 dejavu-sans-fonts
+              bash /work/scripts/smoke-unix.sh linux-x64-appimage
+            '
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.platform }}

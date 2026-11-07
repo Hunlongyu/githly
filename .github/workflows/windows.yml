@@ -89,6 +89,7 @@ jobs:
               @{ file = 'macos-x64.dmg'; manifest = 'update-macos-x64.json'; alt = 'DMG Intel X64'; badge = 'DMG-Intel_X64-009ec4?style=plastic&logo=apple&logoColor=white' }
             )
             'Linux' = @(
+              @{ file = 'linux-x64.AppImage'; manifest = 'update-linux-x64-appimage.json'; alt = 'AppImage x64'; badge = 'AppImage-x64-e75026?style=plastic&logo=linux&logoColor=white' }
               @{ file = 'linux-x64.deb'; manifest = 'update-linux-x64.json'; alt = 'DebPackage x64'; badge = 'DebPackage-x64-f29762?style=plastic&logo=debian&logoColor=white' }
             )
           }

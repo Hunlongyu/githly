@@ -227,6 +227,36 @@ fn legacy_update_settings_keep_only_the_server_cooldown() {
     );
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn appimage_update_preserves_the_channel_and_replaces_only_verified_bytes() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let image = dir.path().join("My Githly.AppImage");
+    let downloaded = dir.path().join("update");
+    let mode = Distribution::Portable;
+    let update = manifest(mode, "0.2.0", b"new");
+    assert!(update.installer.url.ends_with(".AppImage"));
+    assert_eq!(
+        mode.manifest_name(),
+        format!("update-{}-appimage.json", platform_id())
+    );
+    assert!(validate(&update, Distribution::Native).is_err());
+    assert!(validate(&available(b"deb").manifest, mode).is_err());
+    std::fs::write(&image, b"old").unwrap();
+    std::fs::set_permissions(&image, std::fs::Permissions::from_mode(0o750)).unwrap();
+    std::fs::write(&downloaded, b"bad").unwrap();
+    assert!(appimage::replace(&image, &downloaded, &update.installer).is_err());
+    assert_eq!(std::fs::read(&image).unwrap(), b"old");
+    std::fs::write(&downloaded, b"new").unwrap();
+    appimage::replace(&image, &downloaded, &update.installer).unwrap();
+    assert_eq!(std::fs::read(&image).unwrap(), b"new");
+    assert_eq!(
+        std::fs::metadata(&image).unwrap().permissions().mode() & 0o777,
+        0o750
+    );
+}
+
 #[cfg(windows)]
 #[test]
 fn portable_channel_never_accepts_the_setup_manifest() {
