@@ -53,11 +53,18 @@ fn main() -> anyhow::Result<()> {
         init(cx);
         gpui_kit::component::set_locale(i18n::messages().tag());
         motion::init(config.motion, cx);
+        cx.set_app_identity("com.hunlongyu.githly", "Githly");
+        cx.on_window_closed(|cx, _| {
+            if cx.windows().is_empty() {
+                cx.quit();
+            }
+        })
+        .detach();
         cx.bind_keys([
-            KeyBinding::new("ctrl-o", app::OpenProject, None),
-            KeyBinding::new("ctrl-,", app::OpenSettings, None),
-            KeyBinding::new("ctrl-f", app::FocusHistory, None),
-            KeyBinding::new("ctrl-b", app::ToggleBranches, None),
+            KeyBinding::new("secondary-o", app::OpenProject, None),
+            KeyBinding::new("secondary-,", app::OpenSettings, None),
+            KeyBinding::new("secondary-f", app::FocusHistory, None),
+            KeyBinding::new("secondary-b", app::ToggleBranches, None),
         ]);
         let mode = match config.appearance {
             Appearance::Light => ThemeMode::Light,
@@ -69,6 +76,7 @@ fn main() -> anyhow::Result<()> {
         open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
+                app_id: Some("githly".into()),
                 window_min_size: Some(size(px(900.), px(600.))),
                 titlebar: Some(TitlebarOptions {
                     title: Some("Githly".into()),

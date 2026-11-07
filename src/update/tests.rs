@@ -57,7 +57,7 @@ fn manifest(version: &str, content: &[u8]) -> Vec<u8> {
     serde_json::to_vec(&serde_json::json!({
         "version": version,
         "notes_url": format!("{RELEASES}/tag/v{version}"),
-        "installer": { "url": format!("{RELEASES}/download/v{version}/Githly-{version}-windows-x64-setup.exe"), "size": content.len(), "sha256": hash }
+        "installer": { "url": format!("{RELEASES}/download/v{version}/{}", package_name(&Version::parse(version).unwrap())), "size": content.len(), "sha256": hash }
     })).unwrap()
 }
 fn available(content: &[u8]) -> Available {
@@ -78,7 +78,7 @@ fn no_update_never_downloads_manifest() {
 
 #[test]
 fn new_release_uses_matching_manifest_and_rejects_stale_mirror() {
-    let address = format!("{RELEASES}/download/v0.2.0/update.json");
+    let address = format!("{RELEASES}/download/v0.2.0/{}", manifest_name());
     let mut fetch = Mock::new(vec![
         release("0.2.0"),
         reply(&address, 200, manifest("0.2.0", b"installer")),
@@ -110,7 +110,7 @@ fn new_release_uses_matching_manifest_and_rejects_stale_mirror() {
 fn rate_limit_uses_release_mirror_and_honors_server_cooldown() {
     for status in [403, 429] {
         let mirror = "https://mirror.example/";
-        let address = format!("{mirror}{RELEASES}/latest/download/update.json");
+        let address = format!("{mirror}{RELEASES}/latest/download/{}", manifest_name());
         let mut preferences = Preferences {
             mirror: mirror.into(),
             ..Preferences::default()
@@ -137,7 +137,10 @@ fn mirror_failure_is_reported_and_cooldown_survives_failure() {
     let mut fetch = Mock::new(vec![
         reply(API, 429, vec![]),
         reply(
-            format!("https://mirror.example/{RELEASES}/latest/download/update.json"),
+            format!(
+                "https://mirror.example/{RELEASES}/latest/download/{}",
+                manifest_name()
+            ),
             503,
             vec![],
         ),
@@ -204,6 +207,7 @@ fn manifest_and_mirror_addresses_cannot_supply_arbitrary_executables() {
 }
 
 #[test]
+#[cfg(windows)]
 fn install_failure_preserves_current_program() {
     let directory = tempfile::tempdir().unwrap();
     let update = available(b"not an executable");

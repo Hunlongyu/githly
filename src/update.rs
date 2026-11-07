@@ -12,22 +12,44 @@ use std::{
 
 #[cfg(windows)]
 mod http;
-#[cfg(windows)]
-pub use http::Http;
-#[cfg(not(windows))]
-struct Http;
-#[cfg(not(windows))]
-impl Fetch for Http {
-    fn get(&mut self, _: &str, _: &mut dyn Write, _: u64) -> Result<Response> {
-        bail!(messages().windows_updates())
-    }
-}
+#[cfg(unix)]
+#[path = "update/unix_http.rs"]
+mod http;
+use http::Http;
 #[cfg(test)]
 mod tests;
 
 const RELEASES: &str = "https://github.com/Hunlongyu/githly/releases";
 const API: &str = "https://api.github.com/repos/Hunlongyu/githly/releases/latest";
 const MAX_INSTALLER: u64 = 256 * 1024 * 1024;
+
+fn platform_id() -> String {
+    let arch = match std::env::consts::ARCH {
+        "x86_64" => "x64",
+        "aarch64" => "arm64",
+        other => other,
+    };
+    format!("{}-{arch}", std::env::consts::OS)
+}
+
+fn manifest_name() -> String {
+    // Keep the manifest URL used by already-installed Windows x64 clients.
+    if cfg!(all(windows, target_arch = "x86_64")) {
+        "update.json".into()
+    } else {
+        format!("update-{}.json", platform_id())
+    }
+}
+
+fn package_name(version: &Version) -> String {
+    #[cfg(windows)]
+    let suffix = "-setup.exe";
+    #[cfg(target_os = "linux")]
+    let suffix = ".deb";
+    #[cfg(target_os = "macos")]
+    let suffix = ".dmg";
+    format!("Githly-{version}-{}{suffix}", platform_id())
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
@@ -145,7 +167,7 @@ fn validate(manifest: &Manifest) -> Result<Version> {
     );
     ensure!(
         manifest.installer.url
-            == format!("{RELEASES}/download/v{version}/Githly-{version}-windows-x64-setup.exe"),
+            == format!("{RELEASES}/download/v{version}/{}", package_name(&version)),
         messages().invalid_installer_url()
     );
     ensure!(
@@ -220,9 +242,10 @@ fn check_with(
             Err(_) => fallback = true,
         }
     }
+    let manifest_file = manifest_name();
     let direct = expected.as_ref().map_or_else(
-        || format!("{RELEASES}/latest/download/update.json"),
-        |version| format!("{RELEASES}/download/v{version}/update.json"),
+        || format!("{RELEASES}/latest/download/{manifest_file}"),
+        |version| format!("{RELEASES}/download/v{version}/{manifest_file}"),
     );
     let mut used_mirror = fallback && !mirror.is_empty();
     let address = if used_mirror {
@@ -302,7 +325,10 @@ fn download_with(
     // A single fixed cache entry bounds disk usage across versions. Unique partial
     // files prevent a second application instance from sharing an active writer.
     let partial = PartialFile(directory.join(format!("installer-{}.part", std::process::id())));
-    let destination = directory.join("Githly-update.exe");
+    let extension = Path::new(&available.manifest.installer.url)
+        .extension()
+        .expect("validated package URL has an extension");
+    let destination = directory.join("Githly-update").with_extension(extension);
     let mut error = anyhow::anyhow!(messages().installer_failed());
     for url in urls {
         let result = (|| {
@@ -359,17 +385,34 @@ pub fn verify_file(path: &Path, installer: &Installer) -> Result<()> {
 
 pub fn install(path: &Path, installer: &Installer) -> Result<()> {
     verify_file(path, installer)?;
-    let mut command = std::process::Command::new(path);
-    // The normal installer keeps errors visible and uses Restart Manager to close
-    // applications gracefully. No shell, forced termination, or silent overwrite.
-    command.arg("/UPDATE").arg("/NORESTART");
-    if let Some(directory) = std::env::current_exe()?.parent()
-        && directory.join("unins000.exe").is_file()
+    #[cfg(unix)]
     {
-        command.arg(format!("/DIR={}", directory.display()));
+        let opener = if cfg!(target_os = "macos") {
+            "open"
+        } else {
+            "xdg-open"
+        };
+        let status = std::process::Command::new(opener)
+            .arg(path)
+            .status()
+            .context(messages().installer_launch_failed())?;
+        ensure!(status.success(), messages().installer_launch_failed());
+        Ok(())
     }
-    command
-        .spawn()
-        .context(messages().installer_launch_failed())?;
-    Ok(())
+    #[cfg(windows)]
+    {
+        let mut command = std::process::Command::new(path);
+        // The normal installer keeps errors visible and uses Restart Manager to close
+        // applications gracefully. No shell, forced termination, or silent overwrite.
+        command.arg("/UPDATE").arg("/NORESTART");
+        if let Some(directory) = std::env::current_exe()?.parent()
+            && directory.join("unins000.exe").is_file()
+        {
+            command.arg(format!("/DIR={}", directory.display()));
+        }
+        command
+            .spawn()
+            .context(messages().installer_launch_failed())?;
+        Ok(())
+    }
 }

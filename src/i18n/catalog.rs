@@ -17,8 +17,9 @@ macro_rules! messages {
 }
 
 macro_rules! formatted_messages {
-    ($( $name:ident($($arg:ident),+) => $zh:literal, $en:literal; )*) => { impl Locale {
+    ($( $(#[$attr:meta])* $name:ident($($arg:ident),+) => $zh:literal, $en:literal; )*) => { impl Locale {
         $(
+            $(#[$attr])*
             pub(crate) fn $name(self, $($arg: impl Display),+) -> String {
                 match self {
                     Locale::Chinese => format!($zh, $($arg = $arg),+),
@@ -32,7 +33,7 @@ macro_rules! formatted_messages {
 messages! {
     filter_paths => "按路径筛选更改", "Filter changes by path";
     search_history => "搜索说明、作者、哈希", "Search messages, authors, or hashes";
-    choose_git_exe => "选择 git.exe", "Select git.exe";
+    choose_git_exe => "选择 Git 可执行文件", "Select Git executable";
     open_project => "加载项目", "Open project";
     loading_files => "正在读取文件…", "Loading files…";
     commit_no_diff => "此次提交没有文件差异", "This commit has no file changes";
@@ -52,15 +53,21 @@ messages! {
     switch_light => "切换为浅色", "Switch to light theme";
     switch_dark => "切换为深色", "Switch to dark theme";
     settings => "设置", "Settings";
+    #[cfg(not(target_os = "macos"))]
     update_available_tip => "有可用更新 · 设置  Ctrl+,", "Update available · Settings  Ctrl+,";
+    #[cfg(target_os = "macos")]
+    update_available_tip => "有可用更新 · 设置  ⌘,", "Update available · Settings  ⌘,";
+    #[cfg(not(target_os = "macos"))]
     settings_shortcut => "设置  Ctrl+,", "Settings  Ctrl+,";
+    #[cfg(target_os = "macos")]
+    settings_shortcut => "设置  ⌘,", "Settings  ⌘,";
     switching_branch => "正在切换分支…", "Switching branches…";
     loading_project => "正在读取项目…", "Loading project…";
-    config_dir_missing => "无法定位 AppData 配置目录", "Could not locate the configuration directory";
+    config_dir_missing => "无法定位配置目录", "Could not locate the configuration directory";
     invalid_config => "配置文件格式无效，原文件已保留", "Invalid settings file. The original file was preserved.";
     unsupported_config => "不支持此配置文件版本，原文件已保留", "Unsupported settings version. The original file was preserved.";
     invalid_config_dir => "配置目录无效", "Invalid configuration directory";
-    create_config_dir => "无法创建 AppData 配置目录", "Could not create the configuration directory";
+    create_config_dir => "无法创建配置目录", "Could not create the configuration directory";
     write_config => "无法写入配置", "Could not write settings";
     save_config => "无法保存配置文件", "Could not save the settings file";
     head_to_worktree => "HEAD → 工作区", "HEAD → working tree";
@@ -98,20 +105,28 @@ messages! {
     cherry_picking => "拣选中", "Cherry-picking";
     reverting => "还原提交中", "Reverting";
     bisecting => "二分定位中", "Bisecting";
-    appdata_missing => "无法定位 AppData", "Could not locate the application data directory";
+    appdata_missing => "无法定位应用数据目录", "Could not locate the application data directory";
+    #[cfg(windows)]
     register_launch => "无法注册 Githly 启动请求", "Could not register the Githly launch handler";
     create_window => "无法创建 Githly 窗口", "Could not create the Githly window";
+    #[cfg(windows)]
     instance_lock => "无法创建 Githly 单实例锁", "Could not create the Githly single-instance lock";
+    #[cfg(windows)]
     instance_not_ready => "已有 Githly 进程，但主窗口尚未就绪", "Githly is running, but its window is not ready";
+    #[cfg(windows)]
     path_too_long => "仓库路径过长", "Repository path is too long";
+    #[cfg(windows)]
     instance_unresponsive => "已有 Githly 窗口未响应启动请求", "The existing Githly window did not respond";
+    #[cfg(windows)]
     launch_rejected => "已有 Githly 窗口未接受启动请求", "The existing Githly window declined the launch request";
+    #[cfg(windows)]
     window_handle => "无法取得主窗口句柄", "Could not get the main window handle";
+    #[cfg(windows)]
     no_win32_handle => "缺少 Win32 窗口句柄", "Missing Win32 window handle";
+    #[cfg(windows)]
     receive_launch => "无法接收重复启动请求", "Could not receive additional launch requests";
+    #[cfg(windows)]
     mark_window => "无法标记主窗口", "Could not register the main window";
-    #[cfg(not(windows))]
-    windows_updates => "自动更新目前仅支持 Windows", "Automatic updates are available on Windows only";
     invalid_mirror => "镜像地址无效", "Invalid mirror URL";
     mirror_https => "镜像须为不带账户、查询参数的 HTTPS 前缀", "Use an HTTPS mirror prefix without credentials or query parameters";
     invalid_version => "更新版本号无效", "Invalid update version";
@@ -189,7 +204,10 @@ messages! {
     no_git => "尚未找到可用的 Git", "No usable Git installation found";
     open_local => "加载本地项目", "Open local project";
     drop_repository => "选择仓库文件夹，或将文件夹拖到这里", "Choose a repository folder or drop it here";
+    #[cfg(not(target_os = "macos"))]
     open_shortcut => "打开本地仓库  Ctrl+O", "Open local repository  Ctrl+O";
+    #[cfg(target_os = "macos")]
+    open_shortcut => "打开本地仓库  ⌘O", "Open local repository  ⌘O";
     history_display => "历史显示配置", "History display options";
     show_hash => "显示提交哈希", "Show commit hash";
     show_tags => "显示标签", "Show tags";
@@ -241,9 +259,12 @@ messages! {
     locked => "已锁定", "Locked";
     directory_missing => "目录不可用", "Directory unavailable";
     clean_worktree => "工作区干净", "Working tree clean";
+    #[cfg(windows)]
     https_required => "更新连接必须使用 HTTPS", "Update connections require HTTPS";
+    #[cfg(windows)]
     missing_host => "缺少服务器地址", "Missing server address";
     update_size_limit => "更新文件超过大小限制", "Update file exceeds the size limit";
+    #[cfg(windows)]
     request_timeout => "更新请求超时", "Update request timed out";
     language => "语言", "Language";
     language_restart => "重启 Githly 后应用语言更改。", "Restart Githly to apply the language change.";
@@ -283,6 +304,8 @@ formatted_messages! {
     history_failed(status) => "Git 历史读取失败（{status}）", "Could not read Git history ({status})";
     worktree_changes(count) => "{count} 项更改", "Changes: {count}";
     unreadable(error) => "不可读取：{error}", "Cannot read: {error}";
+    #[cfg(windows)]
     connection_failed(error) => "网络连接失败：{error}", "Network connection failed: {error}";
+    #[cfg(windows)]
     request_failed(error) => "网络请求失败：{error}", "Network request failed: {error}";
 }

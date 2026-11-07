@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Githly
+Comment=Browse local Git changes and commit history
+Comment[zh_CN]=浏览本地 Git 更改与提交历史
+Exec=githly %f
+Icon=githly
+Terminal=false
+Categories=Development;RevisionControl;
+StartupWMClass=githly
