@@ -54,6 +54,7 @@ impl GitPanel {
                     return;
                 }
                 this.history_loading = false;
+                this.wake_auto_refresh();
                 match result {
                     Ok((next, stream)) => {
                         this.history_stream = stream;

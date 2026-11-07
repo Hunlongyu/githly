@@ -71,5 +71,10 @@ with (out / name).open("rb") as stream:
 base = "https://github.com/Hunlongyu/githly/releases"
 manifest = {"version": version, "notes_url": f"{base}/tag/v{version}", "installer": {
     "url": f"{base}/download/v{version}/{name}", "size": (out / name).stat().st_size, "sha256": digest}}
+for section in pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8").split("\n## "):
+    heading, _, body = section.partition("\n")
+    if heading.startswith(f"v{version} · "):
+        manifest["notes"] = body.strip()
+        break
 (out / f"update-{platform}.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 PY

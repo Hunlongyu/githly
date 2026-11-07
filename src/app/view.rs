@@ -169,11 +169,7 @@ impl GitPanel {
                 controls::button("clear-recent")
                     .ghost()
                     .label(messages().clear_recent())
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.config.recent_projects.clear();
-                        this.save(cx);
-                        cx.notify();
-                    })),
+                    .on_click(cx.listener(|this, _, _, cx| this.clear_recent(cx))),
             );
         }
         h_flex()
@@ -205,12 +201,18 @@ impl GitPanel {
                         view.child(messages().detect_system_git())
                     })
                     .when(self.git.is_none() && !self.detecting, |view| {
-                        view.child(messages().no_git()).child(self.git_controls(cx))
+                        view.child(
+                            self.git_error
+                                .clone()
+                                .unwrap_or_else(|| messages().no_git().into()),
+                        )
+                        .child(self.git_controls(cx))
                     })
                     .when(self.git.is_some(), |view| {
                         view.child(
                             v_flex()
                                 .id("load-project-zone")
+                                .test_support()
                                 .w_full()
                                 .h(px(150.))
                                 .mt_3()
@@ -676,9 +678,30 @@ impl GitPanel {
                     )
                 })
             })
-            .child(if self.stash_tab {
+            .child(if self.stash_tab && repo.stashes.is_empty() {
+                v_flex()
+                    .id("stash-empty")
+                    .test_support()
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .items_center()
+                    .justify_center()
+                    .gap_2()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(Icon::new(gpui_kit::assets::IconName::Archive).size(px(22.)))
+                    .child(
+                        div()
+                            .id("stash-empty-label")
+                            .test_support()
+                            .child(messages().no_stashes()),
+                    )
+                    .into_any_element()
+            } else if self.stash_tab {
                 v_flex()
                     .id("stash-list")
+                    .test_support()
                     .flex_1()
                     .min_h_0()
                     .text_sm()
@@ -724,13 +747,6 @@ impl GitPanel {
                         .w_full()
                         .min_h_0(),
                     )
-                    .when(repo.stashes.is_empty(), |view| {
-                        view.child(
-                            div()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(messages().no_stashes()),
-                        )
-                    })
                     .into_any_element()
             } else {
                 self.working_file_groups(&repo.changes, cx)

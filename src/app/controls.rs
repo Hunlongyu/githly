@@ -27,8 +27,12 @@ pub(super) fn button(id: impl Into<ElementId>) -> Button {
     Button::new(id).small().h(px(CONTROL_HEIGHT)).px(px(10.))
 }
 
-pub(super) fn icon_button(id: impl Into<ElementId>, icon: IconName) -> Button {
-    button(id).ghost().icon(icon).w(px(CONTROL_HEIGHT)).px_0()
+pub(super) fn icon_button(id: impl Into<ElementId>, icon: impl Into<Icon>) -> Button {
+    button(id)
+        .ghost()
+        .icon(Icon::new(icon))
+        .w(px(CONTROL_HEIGHT))
+        .px_0()
 }
 
 pub(super) fn segmented(id: impl Into<ElementId>) -> TabBar {

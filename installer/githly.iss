@@ -37,6 +37,7 @@ Source: "..\vendor\gpui-component\LICENSE-APACHE"; DestDir: "{app}"; DestName: "
 
 [Icons]
 Name: "{autoprograms}\Githly"; Filename: "{app}\Githly.exe"
+Name: "{autodesktop}\Githly"; Filename: "{app}\Githly.exe"; WorkingDir: "{app}"
 
 [Run]
 Filename: "{app}\Githly.exe"; Description: "Launch Githly"; Flags: nowait postinstall skipifsilent

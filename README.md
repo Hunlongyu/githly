@@ -44,16 +44,16 @@
 
 ## Highlights
 
-- **Built for AI & CLI Workflows** — Automatically refreshes local status (~15s in the foreground, ~60s in the background) without locking your repository or interfering with ongoing Git operations.
+- **Built for AI & CLI Workflows** — Automatically refreshes local status (~3s in the foreground, ~600s in the background) without locking your repository or interfering with ongoing Git operations.
 - **Reading Position Preservation** — Open diffs keep their snapshot and scroll position while background changes happen. When browsing older history, Githly notifies you of new commits without jumping your viewport.
 - **Side-by-Side Text & Image Diffs** — Inspect unstaged and staged modifications separately or together, jump between hunks, and preview before/after image changes (`PNG`, `JPEG`, `GIF`, `WebP`, `BMP`, `ICO`, `TIFF`, `SVG`).
 - **Streaming Commit Graph** — Explore commit history with an interactive branch graph or flat list across the current branch, a specific branch, or all branches, streaming batches on demand as you scroll.
 - **Stash & Worktree Inspector** — Browse saved stashes (including untracked files) and inspect or switch between active Git worktrees directly from the top bar.
-- **Native Rust + GPUI Performance** — Uses your system `git.exe` asynchronously with strict memory budgets and viewport virtualization.
+- **Native Rust + GPUI Performance** — Uses your system Git asynchronously with strict memory budgets and viewport virtualization.
 
 ## Download & Installation
 
-Install Git before opening a repository. Use Settings to choose its executable if it is not on PATH. Windows x64 is available as a stable release. The first macOS and Linux packages are distributed through CI.
+Install Git before opening a repository. Use Settings to choose its executable if it is not on PATH.
 
 Githly uses the first supported language in your system preferences (English or Simplified Chinese), with English as the fallback. To override it, open **Settings → Language**, choose a language, and restart Githly.
 
@@ -61,15 +61,12 @@ Download the latest installer or portable archive from **[GitHub Releases](https
 
 | Edition | Artifact | How to Run |
 | --- | --- | --- |
-| **Installer** *(Recommended)* | `*-windows-x64-setup.exe` | Run the installer to install Githly for the current user (no admin rights required), then launch **Githly** from the Start Menu. |
-| **Portable ZIP** | `*-windows-x64.zip` | Extract the archive to any folder and run `Githly.exe` directly. |
+| **Windows x64 installer** | `*-windows-x64-setup.exe` | Run the installer for the current user, then launch **Githly** from the Start menu or desktop. |
+| **Windows x64 portable ZIP** | `*-windows-x64.zip` | Extract the archive to any folder and run `Githly.exe`. |
+| **macOS** | `*-macos-arm64.dmg` (Apple Silicon) or `*-macos-x64.dmg` (Intel) | Mount the DMG and drag Githly to Applications. The app is ad-hoc signed and has not been notarized by Apple. |
+| **Ubuntu 24.04 amd64** | `*-linux-x64.deb` | Run `sudo apt install ./Githly-*-linux-x64.deb` in the download folder. Launch Githly from the app menu or run `githly /path/to/repository`. The desktop requires a Vulkan driver and X11 or Wayland. |
 
-**CI test packages.** Sign in to GitHub and open a successful main-branch run. [Windows builds](https://github.com/Hunlongyu/githly/actions/workflows/windows.yml) contain the installer and portable ZIP. [macOS and Linux builds](https://github.com/Hunlongyu/githly/actions/workflows/desktop.yml) contain these artifacts for 14 days:
-
-| Artifact | Installation |
-| --- | --- |
-| `macos-arm64` / `macos-x64` | Choose Apple Silicon or Intel, extract the artifact, mount the DMG, then drag Githly to Applications. CI bundles are ad-hoc signed and are not notarized. |
-| `linux-x64` | On Ubuntu 24.04 amd64, extract the artifact and run `sudo apt install ./Githly-*-linux-x64.deb` from that directory. Launch Githly from the app menu or run `githly /path/to/repository`. The desktop requires a working Vulkan driver and X11 or Wayland. |
+Test packages from successful main-branch runs are available for 14 days to signed-in GitHub users. [Windows builds](https://github.com/Hunlongyu/githly/actions/workflows/windows.yml) · [macOS and Linux builds](https://github.com/Hunlongyu/githly/actions/workflows/desktop.yml)
 
 ## Quick Start
 
@@ -87,7 +84,7 @@ Githly runs a single window per user session. Launching it again focuses or rest
 | **How much has changed?** | The **Changes** panel groups tracked and untracked files, supports path filtering, and asynchronously computes per-file and total added/deleted line counts. |
 | **How do branches diverge and merge?** | Toggle between the **Commit Graph** and **List** views across the current branch, a selected branch, or all branches. History loads ~2 screens initially and streams up to 100 commits per batch as you scroll near the bottom. Search filters loaded commits. |
 | **How far ahead or behind is my branch?** | View ahead/behind commit counts relative to upstream. Remote-tracking branches and counts reflect local refs and update automatically after you run `git fetch` in your terminal or IDE. |
-| **Did files change while I was reading?** | Githly checks local state every ~15s in the foreground and ~60s in the background. When viewing older commits, a banner alerts you to new commits until you return to the top. Open diffs preserve your reading position; reselect a file to reload its latest contents. |
+| **Did files change while I was reading?** | Githly checks local state about every 3 seconds in the foreground and every 10 minutes in the background. Refocusing triggers an immediate check if the last successful read was at least 3 seconds ago. When viewing older commits, a banner alerts you to new commits until you return to the top. Open diffs preserve your reading position; reselect a file to reload its latest contents. |
 | **What exactly changed in a commit?** | Read the full commit message and side-by-side monospace text diffs with line numbers and change highlighting. Supported image formats are previewed side by side (`GIF` and `WebP` render their first frame). |
 | **What is inside Stashes and Worktrees?** | The **Stash** view shows saved files and diffs, including untracked files captured in the stash. The top-bar **Worktree** menu lists paths, branches, and dirty states across linked worktrees and lets you open any worktree directly. |
 
@@ -95,13 +92,9 @@ Githly runs a single window per user session. Launching it again focuses or rest
 
 ## Software Updates
 
-Press `Ctrl+,` to open **Settings → Software Update**. You can check for updates immediately or configure automatic checks **Daily** (default), **Every 3 Days**, **Weekly**, or **Manual Only**. Updates are fetched from official GitHub Releases.
+Githly checks for updates at startup. When a newer version is available, a download icon appears in the upper-right corner. Click it to read the release notes, then choose **Download update** to see the progress bar. You can close the dialog and reopen it while the download continues.
 
-When a new release is available:
-- Click **Release Notes** to review changes, or click **Download Update**.
-- After verifying the installer size and `SHA-256` digest, Githly displays **Install Update…** to open the platform package (Windows setup, macOS disk image, or Linux package handler).
-- Portable ZIP users who prefer keeping a standalone folder can download the latest `.zip` directly from the release page.
-- If GitHub API rate limits apply on your network, you can configure a trusted HTTPS Release Mirror prefix in Settings. See **[Release & Update Documentation](docs/releases.md)** for details.
+Windows installations update through Setup and get a desktop shortcut. A portable copy downloads the ZIP and replaces its executable in the same folder. Restart it to use the new version. On macOS and Linux, Githly opens the verified platform package. If a direct download fails, Githly tries its built-in mirrors and verifies the bytes against the size and SHA-256 supplied by GitHub.
 
 On macOS, use Command in place of Ctrl for Githly shortcuts.
 
@@ -119,7 +112,7 @@ On macOS, use Command in place of Ctrl for Githly shortcuts.
 
 macOS stores settings and logs under `~/Library/Application Support/githly`. Linux uses the XDG config and data directories, usually `~/.config/githly` and `~/.local/share/githly`. On Windows:
 
-- **Configuration:** `%APPDATA%\githly\config.json` (stores recent repositories, theme, panel dimensions, custom Git path, and update preferences).
+- **Configuration:** `%APPDATA%\githly\config.json` (stores recent repositories, theme, panel dimensions, and custom Git path).
 - **Application Logs:** `%LOCALAPPDATA%\githly\logs` (records warnings and operational errors for troubleshooting).
 
 ## Build from Source

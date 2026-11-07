@@ -45,6 +45,7 @@ messages! {
     recent_projects => "最近打开", "Recent projects";
     open_another => "加载其他项目…", "Open another project…";
     clear_recent => "清除最近记录", "Clear recent projects";
+    recent_cleared => "已清除最近项目记录", "Recent projects cleared";
     close_project => "关闭项目", "Close project";
     upstream_missing => "上游跟踪记录在本地不可用，暂时无法计算提交数量", "The upstream ref is unavailable locally. Ahead and behind counts are unknown.";
     no_upstream => "未设置上游", "No upstream";
@@ -53,10 +54,7 @@ messages! {
     switch_light => "切换为浅色", "Switch to light theme";
     switch_dark => "切换为深色", "Switch to dark theme";
     settings => "设置", "Settings";
-    #[cfg(not(target_os = "macos"))]
-    update_available_tip => "有可用更新 · 设置  Ctrl+,", "Update available · Settings  Ctrl+,";
-    #[cfg(target_os = "macos")]
-    update_available_tip => "有可用更新 · 设置  ⌘,", "Update available · Settings  ⌘,";
+    update_available_tip => "有新版本，查看更新日志", "Update available · View release notes";
     #[cfg(not(target_os = "macos"))]
     settings_shortcut => "设置  Ctrl+,", "Settings  Ctrl+,";
     #[cfg(target_os = "macos")]
@@ -123,8 +121,6 @@ messages! {
     receive_launch => "无法接收重复启动请求", "Could not receive additional launch requests";
     #[cfg(windows)]
     mark_window => "无法标记主窗口", "Could not register the main window";
-    invalid_mirror => "镜像地址无效", "Invalid mirror URL";
-    mirror_https => "镜像须为不带账户、查询参数的 HTTPS 前缀", "Use an HTTPS mirror prefix without credentials or query parameters";
     invalid_version => "更新版本号无效", "Invalid update version";
     stable_only => "仅支持正式版本更新", "Only stable updates are supported";
     invalid_notes => "更新说明地址不属于本项目", "Release notes URL does not belong to this project";
@@ -134,7 +130,6 @@ messages! {
     invalid_release => "GitHub 版本信息格式无效", "Invalid GitHub release metadata";
     no_release => "尚无正式版本", "No stable release is available";
     invalid_manifest => "更新清单格式无效", "Invalid update manifest";
-    mirror_outdated => "镜像版本尚未同步，请稍后重试", "The mirror has not synced yet. Try again later.";
     update_cache_dir => "无法定位更新缓存目录", "Could not locate the update cache directory";
     installer_failed => "安装包下载失败", "Installer download failed";
     installer_in_use => "旧安装包正在使用，请稍后重试", "The previous installer is in use. Try again later.";
@@ -158,7 +153,6 @@ messages! {
     after => "修改后", "After";
     first_frame => " · 首帧", " · First frame";
     missing_image => "此版本中不存在此图片", "Image is absent in this revision";
-    mirror_placeholder => "Release 镜像 HTTPS 前缀（可选）", "Release mirror HTTPS prefix (optional)";
     done => "完成", "Done";
     appearance => "外观", "Appearance";
     light => "浅色", "Light";
@@ -175,23 +169,16 @@ messages! {
     settings_autosave => "设置自动保存", "Settings are saved automatically";
     loading_stash => "正在读取 Stash…", "Loading stash…";
     empty_stash => "Stash 中没有文件变化", "This stash has no file changes";
-    check_cooldown => "刚刚已检查，请至少等待一分钟再试。", "Please wait at least a minute before checking again.";
-    checking_updates => "正在检查更新…", "Checking for updates…";
-    mirror_no_update => "镜像暂未提供较新版本", "No newer version on the mirror";
-    up_to_date => "已是最新版本", "You're up to date";
-    downloading => "正在后台下载安装包…", "Downloading installer…";
-    download_verified => "安装包已下载并通过校验，可启动安装。", "Installer downloaded and verified. Ready to install.";
-    opening_installer => "正在重新校验并打开安装程序…", "Verifying and opening the installer…";
+    downloading => "正在下载更新包…", "Downloading update…";
+    download_verified => "更新包已下载并通过校验。", "Update downloaded and verified.";
+    opening_installer => "正在校验并应用更新…", "Verifying and applying the update…";
     installer_opened => "安装程序已打开；完成后可重新启动 Githly。", "Installer opened. Restart Githly after installation.";
-    check_updates => "检查更新", "Check for updates";
-    manual => "手动", "Manual";
-    daily => "每天", "Daily";
-    three_days => "每三天", "Every 3 days";
-    weekly => "每周", "Weekly";
-    save_mirror => "保存镜像", "Save mirror";
-    mirror_saved => "更新源设置已保存。", "Update source saved.";
-    mirror_help => "镜像填 HTTPS 前缀，需支持在前缀后拼接完整 GitHub Release 地址；留空使用 GitHub。", "Use an HTTPS mirror that accepts a full GitHub Release URL after its prefix. Leave blank to use GitHub.";
-    release_notes => "更新说明", "Release notes";
+    notes_unavailable => "此版本未提供更新说明。", "No release notes are available for this version.";
+    #[cfg(windows)]
+    invalid_portable_zip => "便携包缺少有效的 Githly.exe。", "The portable ZIP does not contain a valid Githly.exe.";
+    #[cfg(windows)]
+    portable_updated => "便携版已在原目录更新。重新启动 Githly 即可使用新版本。", "The portable copy has been updated in place. Restart Githly to use the new version.";
+    release_notes => "更新日志", "Release notes";
     install_update => "安装更新…", "Install update…";
     download_update => "下载更新", "Download update";
     no_recent => "尚未打开项目", "No recent projects";
@@ -276,18 +263,13 @@ formatted_messages! {
     git_path_missing(path) => "Git 程序路径不存在：{path}", "Git executable not found at {path}";
     conflicts(conflicts) => "{conflicts} 个冲突文件", "Conflicted files: {conflicts}";
     truncated_message(body) => "{body}\n\n[提交说明过长，仅显示前 64 KiB]", "{body}\n\n[Commit message truncated to 64 KiB]";
-    release_unavailable(status) => "更新源暂不可用（HTTP {status}）；尚未发布时也可能出现此提示", "Update source unavailable (HTTP {status}). There may be no published release yet.";
     source_unavailable(status) => "更新源暂不可用（HTTP {status}）", "Update source unavailable (HTTP {status})";
-    mirror_source(mirror) => "镜像：{mirror}", "Mirror: {mirror}";
     download_http(status) => "下载失败（HTTP {status}）", "Download failed (HTTP {status})";
     branch_group(name, count, state) => "{name}，{count} 个，{state}", "{name}, {count}, {state}";
     image_preview_failed(error) => "无法预览图片：{error:#}", "Could not preview image: {error:#}";
     draw_image_failed(error) => "图片预览绘制失败：{error}", "Could not draw image preview: {error}";
-    new_version(version, source) => "发现 {version} · {source}", "Version {version} available · {source}";
-    check_failed(error) => "检查失败：{error:#}", "Update check failed: {error:#}";
     download_failed(error) => "下载失败：{error:#}", "Download failed: {error:#}";
     install_failed(error) => "安装未启动：{error:#}；当前版本可继续使用", "Installer did not start: {error:#}. You can keep using this version.";
-    software_updates(version) => "软件更新 · {version}", "Software updates · {version}";
     file_group(heading, count, state) => "{heading}，{count} 个文件，{state}", "{heading}, files: {count}, {state}";
     changes_tab(count) => "更改  {count}", "Changes  {count}";
     history_scope(scope) => "历史 · {scope}", "History · {scope}";

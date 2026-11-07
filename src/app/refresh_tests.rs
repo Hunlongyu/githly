@@ -6,6 +6,71 @@ use gpui_kit::{AppContext, TestAppContext, WindowOptions, point, px};
 use std::sync::Arc;
 
 #[gpui_kit::test]
+fn slow_project_open_uses_a_bottom_right_tip_without_moving_the_welcome_page(
+    cx: &mut TestAppContext,
+) {
+    use gpui_kit::component::{ThemeMode, WindowExt};
+    use std::time::Duration;
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        crate::theme::apply(ThemeMode::Dark, None, cx);
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let (window, panel) = cx.update(|cx| {
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| {
+                GitPanel::new(
+                    ConfigStore {
+                        path: directory.path().join("config.json"),
+                    },
+                    Config::default(),
+                    None,
+                    None,
+                    window,
+                    cx,
+                )
+            })
+        })
+        .unwrap()
+    });
+    panel.update(cx, |panel, cx| {
+        panel.detect_task = None;
+        panel.detecting = false;
+        panel.git = Some(crate::git::Git {
+            executable: "git".into(),
+            version: "test".into(),
+        });
+        panel.begin_project_load(std::future::pending(), cx);
+    });
+    cx.run_until_parked();
+    let before = cx
+        .update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            assert!(window.notifications(cx).is_empty());
+            window.find("load-project-zone").bounds()
+        })
+        .unwrap();
+    cx.executor().advance_clock(Duration::from_millis(260));
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(window.notifications(cx).len(), 1);
+        let stack = window.find(("notification-list", 5_usize)).bounds();
+        assert!(stack.left() > px(0.) && stack.top() > px(40.));
+        assert_eq!(window.find("load-project-zone").bounds(), before);
+    })
+    .unwrap();
+    panel.update(cx, |panel, cx| panel.release_project(cx));
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        assert!(window.notifications(cx).is_empty())
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
 fn startup_and_history_wait_for_user_selection(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
     cx.update(gpui_kit::init);
@@ -34,7 +99,7 @@ fn startup_and_history_wait_for_user_selection(cx: &mut TestAppContext) {
 
     wait_for_git(cx, &panel, |panel| panel.git.is_some());
     panel.update(cx, |panel, cx| {
-        assert!(panel.repository.is_none() && !panel.loading);
+        assert!(panel.repository.is_none() && panel.load_task.is_none());
         panel.load_project(root, cx);
     });
     wait_for_git(cx, &panel, |panel| panel.repository.is_some());
@@ -264,9 +329,11 @@ fn scrolling_near_bottom_loads_more_and_timer_refreshes_local_changes(cx: &mut T
     });
     panel.update(cx, |panel, _| assert!(panel.history_error.is_none()));
     std::fs::write(directory.path().join("automatic.txt"), "new file").unwrap();
+    cx.update_window(window, |_, window, _| window.activate_window())
+        .unwrap();
     cx.run_until_parked();
     cx.executor()
-        .advance_clock(std::time::Duration::from_secs(60));
+        .advance_clock(std::time::Duration::from_secs(3));
     wait_for_git(cx, &panel, |panel| {
         panel
             .repository
@@ -277,6 +344,143 @@ fn scrolling_near_bottom_loads_more_and_timer_refreshes_local_changes(cx: &mut T
             .any(|file| file.path == "automatic.txt")
     });
     panel.update(cx, |panel, cx| panel.release_project(cx));
+}
+
+#[gpui_kit::test]
+fn focus_and_background_timers_respect_the_last_repository_read(cx: &mut TestAppContext) {
+    use std::time::Duration;
+    cx.executor().allow_parking();
+    cx.update(gpui_kit::init);
+    let (directory, git) = fixture(2);
+    let storage = tempfile::tempdir().unwrap();
+    let (window, panel) = cx.update(|cx| {
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| {
+                GitPanel::new(
+                    ConfigStore {
+                        path: storage.path().join("config.json"),
+                    },
+                    Config::default(),
+                    None,
+                    Some(directory.path().to_owned()),
+                    window,
+                    cx,
+                )
+            })
+        })
+        .unwrap()
+    });
+    let focus = |cx: &mut TestAppContext| {
+        cx.update_window(window, |_, window, _| window.activate_window())
+            .unwrap();
+        cx.run_until_parked();
+    };
+    focus(cx);
+    wait_for_git(cx, &panel, |p| {
+        p.repository.is_some() && !p.statistics_pending
+    });
+    let mut view = gpui_kit::VisualTestContext::from_window(window, cx);
+    let marker = directory.path().join("external.txt");
+    let has_marker = |p: &GitPanel| {
+        p.repository
+            .as_ref()
+            .unwrap()
+            .changes
+            .iter()
+            .any(|f| f.path == "external.txt")
+    };
+    let forbid_read = |cx: &mut TestAppContext| {
+        panel.update(cx, |p, _| {
+            p.git.as_mut().unwrap().executable = storage.path().join("missing-git");
+        })
+    };
+    let allow_read = |cx: &mut TestAppContext| panel.update(cx, |p, _| p.git = Some(git.clone()));
+
+    // A recent open counts as a read. Refocusing must keep the remaining
+    // millisecond of the foreground timer, without querying immediately.
+    forbid_read(cx);
+    view.deactivate_window();
+    std::fs::write(&marker, "new").unwrap();
+    cx.executor().advance_clock(Duration::from_millis(2999));
+    focus(cx);
+    panel.update(cx, |p, _| {
+        assert!(p.refresh_error.is_none() && !has_marker(p))
+    });
+    allow_read(cx);
+    cx.executor().advance_clock(Duration::from_millis(1));
+    wait_for_git(cx, &panel, has_marker);
+
+    // Blurring cancels the foreground deadline. The background poll runs at 600s.
+    view.deactivate_window();
+    forbid_read(cx);
+    std::fs::remove_file(&marker).unwrap();
+    cx.executor().advance_clock(Duration::from_secs(599));
+    panel.update(cx, |p, _| {
+        assert!(p.refresh_error.is_none() && has_marker(p))
+    });
+    allow_read(cx);
+    cx.executor().advance_clock(Duration::from_secs(1));
+    wait_for_git(cx, &panel, |p| !has_marker(p));
+
+    // An overdue focus check wakes the 600s wait without advancing time again.
+    cx.executor().advance_clock(Duration::from_secs(4));
+    std::fs::write(&marker, "newer").unwrap();
+    focus(cx);
+    wait_for_git(cx, &panel, has_marker);
+    panel.update(cx, |p, cx| p.release_project(cx));
+}
+
+#[gpui_kit::test]
+fn stash_empty_state_is_centered_and_gives_way_to_the_list(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (directory, git) = fixture(1);
+    let repo = futures_lite::future::block_on(git.open(directory.path(), 46)).unwrap();
+    let (window, panel) = cx.update(|cx| {
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| {
+                let mut panel = GitPanel::new(
+                    ConfigStore {
+                        path: directory.path().join("config.json"),
+                    },
+                    Config::default(),
+                    None,
+                    None,
+                    window,
+                    cx,
+                );
+                panel.detect_task = None;
+                panel.git = Some(git);
+                panel.repository = Some(Arc::new(repo));
+                panel.filter_history(cx);
+                panel
+            })
+        })
+        .unwrap()
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.within("changes-stash-switch").click(1_usize, cx);
+        let pane = window.find("stash-empty").bounds();
+        let label = window.find("stash-empty-label").bounds();
+        assert!(pane.size.height > px(100.));
+        assert!((label.center().x - pane.center().x).abs() <= px(1.));
+        assert!((label.center().y - pane.center().y).abs() < px(24.));
+        assert!(window.try_find("stash-list").is_none());
+        panel.update(cx, |p, cx| {
+            let repo = Arc::make_mut(p.repository.as_mut().unwrap());
+            repo.stashes.push(crate::git::Stash {
+                id: repo.commits[0].id.clone(),
+                selector: "stash@{0}".into(),
+                subject: "Saved changes".into(),
+                date: String::new(),
+            });
+            cx.notify();
+        });
+        window.render_frame(cx);
+        assert!(window.try_find("stash-empty").is_none());
+        assert!(window.try_find("stash-list").is_some());
+    })
+    .unwrap();
 }
 
 fn wait_for_git(

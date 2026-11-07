@@ -1,62 +1,43 @@
 use super::*;
 use crate::i18n::messages;
 use crate::update;
-use gpui_kit::component::{input::Input, tab::Tab};
+use gpui_kit::component::{progress::Progress, text::TextView};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 #[derive(Default)]
 pub(super) struct UpdateState {
     task: Option<Task<()>>,
-    timer: Option<Task<()>>,
+    progress: Option<(u64, u64)>,
+    restart_required: bool,
     busy: bool,
     message: String,
-    pub available: Option<update::Available>,
+    available: Option<update::Available>,
     installer: Option<PathBuf>,
-    pub mirror_input: Option<Entity<InputState>>,
+}
+
+impl UpdateState {
+    pub(super) fn update_available(&self) -> bool {
+        self.available.is_some() && !self.restart_required
+    }
+}
+
+struct UpdateActions(WeakEntity<GitPanel>);
+
+impl Render for UpdateActions {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.0
+            .update(cx, |panel, cx| panel.update_actions(cx))
+            .unwrap_or_else(|_| div().into_any_element())
+    }
 }
 
 impl GitPanel {
-    pub(super) fn start_update_timer(&mut self, cx: &mut Context<Self>) {
-        self.updates.timer = Some(cx.spawn(async move |this, cx| {
-            cx.background_executor()
-                .timer(Duration::from_secs(30))
-                .await;
-            loop {
-                if this
-                    .update(cx, |this, cx| {
-                        let preferences = &this.config.updates;
-                        if preferences.enabled
-                            && update::now().saturating_sub(preferences.last_check)
-                                >= preferences.interval_hours.clamp(6, 168) * 3600
-                        {
-                            this.check_update(cx);
-                        }
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-                // Settings changes take effect on the next hourly wake; no UI ticks.
-                cx.background_executor()
-                    .timer(Duration::from_secs(3600))
-                    .await;
-            }
-        }));
-    }
-
     pub(super) fn check_update(&mut self, cx: &mut Context<Self>) {
-        if self.updates.busy {
+        if self.updates.busy || self.updates.restart_required {
             return;
         }
-        if update::now().saturating_sub(self.config.updates.last_check) < 60 {
-            self.updates.message = messages().check_cooldown().into();
-            cx.notify();
-            return;
-        }
-        self.config.updates.last_check = update::now();
-        self.save(cx);
         self.updates.busy = true;
-        self.updates.message = messages().checking_updates().into();
         self.updates.available = None;
         self.updates.installer = None;
         let mut preferences = self.config.updates.clone();
@@ -68,29 +49,13 @@ impl GitPanel {
             let (result, retry_after) = task.await;
             let _ = this.update(cx, |this, cx| {
                 this.updates.busy = false;
-                this.config.updates.api_retry_after = retry_after;
-                this.save(cx);
+                if this.config.updates.api_retry_after != retry_after {
+                    this.config.updates.api_retry_after = retry_after;
+                    this.save(cx);
+                }
                 match result {
-                    Ok(check) => {
-                        this.updates.message = check.available.as_ref().map_or_else(
-                            || {
-                                format!(
-                                    "{} · {}",
-                                    if matches!(check.source, update::Source::Mirror(_)) {
-                                        messages().mirror_no_update()
-                                    } else {
-                                        messages().up_to_date()
-                                    },
-                                    check.source
-                                )
-                            },
-                            |available| {
-                                messages().new_version(&available.manifest.version, &check.source)
-                            },
-                        );
-                        this.updates.available = check.available;
-                    }
-                    Err(error) => this.updates.message = messages().check_failed(error),
+                    Ok(available) => this.updates.available = available,
+                    Err(error) => tracing::warn!("Update check failed: {error:#}"),
                 }
                 cx.notify();
             });
@@ -107,10 +72,28 @@ impl GitPanel {
         };
         self.updates.busy = true;
         self.updates.message = messages().downloading().into();
-        let task = cx.background_spawn(async move { update::download(&available) });
+        let total = available.manifest.installer.size;
+        let received = Arc::new(AtomicU64::new(0));
+        let counter = received.clone();
+        let executor = cx.background_executor().clone();
+        self.updates.progress = Some((0, total));
+        let task = cx.background_spawn(async move { update::download(&available, &counter) });
         self.updates.task = Some(cx.spawn(async move |this, cx| {
-            let result = task.await;
+            let result = futures_lite::future::race(task, async {
+                loop {
+                    executor.timer(Duration::from_millis(125)).await;
+                    let progress = (received.load(Ordering::Relaxed), total);
+                    this.update(cx, |this, cx| {
+                        if this.updates.progress != Some(progress) {
+                            this.updates.progress = Some(progress);
+                            cx.notify();
+                        }
+                    })?;
+                }
+            })
+            .await;
             let _ = this.update(cx, |this, cx| {
+                this.updates.progress = None;
                 this.updates.busy = false;
                 match result {
                     Ok(path) => {
@@ -137,13 +120,19 @@ impl GitPanel {
         };
         self.updates.busy = true;
         self.updates.message = messages().opening_installer().into();
-        let task = cx
-            .background_spawn(async move { update::install(&path, &available.manifest.installer) });
+        #[cfg(windows)]
+        let portable = available.distribution == update::Distribution::Portable;
+        let task = cx.background_spawn(async move { update::install(&path, &available) });
         self.updates.task = Some(cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
                 this.updates.busy = false;
                 this.updates.message = match result {
+                    #[cfg(windows)]
+                    Ok(()) if portable => {
+                        this.updates.restart_required = true;
+                        messages().portable_updated().into()
+                    }
                     Ok(()) => messages().installer_opened().into(),
                     Err(error) => messages().install_failed(error),
                 };
@@ -153,115 +142,159 @@ impl GitPanel {
         cx.notify();
     }
 
-    pub(super) fn update_settings(&self, cx: &mut Context<Self>) -> AnyElement {
-        let busy = self.updates.busy;
-        let hours = self.config.updates.interval_hours;
-        v_flex()
-            .gap(px(8.))
-            .child(
-                h_flex()
-                    .gap(px(8.))
-                    .justify_between()
-                    .child(
-                        div()
-                            .font_semibold()
-                            .child(messages().software_updates(env!("CARGO_PKG_VERSION"))),
-                    )
-                    .child(
-                        controls::button("check-update")
-                            .label(messages().check_updates())
-                            .disabled(busy)
-                            .on_click(cx.listener(|this, _, _, cx| this.check_update(cx))),
-                    ),
-            )
-            .child(
-                controls::segmented("update-interval")
-                    .selected_index(if !self.config.updates.enabled {
-                        0
-                    } else if hours >= 168 {
-                        3
-                    } else if hours > 24 {
-                        2
-                    } else {
-                        1
-                    })
-                    .child(Tab::new().label(messages().manual()))
-                    .child(Tab::new().label(messages().daily()))
-                    .child(Tab::new().label(messages().three_days()))
-                    .child(Tab::new().label(messages().weekly()))
-                    .on_click(cx.listener(|this, index: &usize, _, cx| {
-                        this.config.updates.enabled = *index != 0;
-                        this.config.updates.interval_hours = [24, 24, 72, 168][*index];
-                        this.save(cx);
-                        cx.notify();
-                    })),
-            )
-            .when_some(self.updates.mirror_input.as_ref(), |view, input| {
-                view.child(
-                    h_flex()
-                        .gap(px(8.))
-                        .child(Input::new(input).small().flex_1())
-                        .child(
-                            controls::button("save-mirror")
-                                .label(messages().save_mirror())
-                                .disabled(busy)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    let value = this
-                                        .updates
-                                        .mirror_input
-                                        .as_ref()
-                                        .unwrap()
-                                        .read(cx)
-                                        .value();
-                                    match update::mirror_prefix(&value) {
-                                        Ok(value) => {
-                                            this.config.updates.mirror = value;
-                                            this.save(cx);
-                                            this.updates.message = messages().mirror_saved().into();
-                                            this.updates.available = None;
-                                            this.updates.installer = None;
-                                        }
-                                        Err(error) => this.updates.message = error.to_string(),
-                                    }
-                                    cx.notify();
-                                })),
-                        ),
+    pub(super) fn open_update_dialog(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(available) = &self.updates.available else {
+            return;
+        };
+        let title = format!(
+            "{} · v{}",
+            messages().release_notes(),
+            available.manifest.version
+        );
+        let notes = available
+            .manifest
+            .notes
+            .split("\n## 下载")
+            .next()
+            .unwrap_or_default()
+            .trim();
+        let body: SharedString = if notes.is_empty() {
+            messages().notes_unavailable().into()
+        } else {
+            notes.to_owned().into()
+        };
+        let parent = cx.entity();
+        let actions = cx.new(|cx| {
+            cx.observe(&parent, |_, _, cx| cx.notify()).detach();
+            UpdateActions(parent.downgrade())
+        });
+        window.open_dialog(cx, move |dialog, _, _| {
+            dialog
+                .title(title.clone())
+                .w(px(620.))
+                .centered()
+                .child(
+                    div()
+                        .id("release-notes-body")
+                        .test_support()
+                        .max_h(px(360.))
+                        .overflow_y_scroll()
+                        .child(TextView::markdown("release-markdown", body.clone())),
                 )
+                .footer(actions.clone())
+        });
+    }
+
+    fn update_actions(&self, cx: &mut Context<Self>) -> AnyElement {
+        v_flex()
+            .w_full()
+            .gap_2()
+            .when_some(self.updates.progress, |view, (bytes, total)| {
+                let percent = bytes * 100 / total.max(1);
+                view.child(
+                    Progress::new("update-progress")
+                        .value(percent as f32)
+                        .accessibility_label(messages().download_update()),
+                )
+                .child(div().text_xs().child(format!(
+                    "{percent}% · {:.1} / {:.1} MiB",
+                    bytes as f64 / 1048576.,
+                    total as f64 / 1048576.
+                )))
             })
-            .child(
-                div()
-                    .text_size(px(11.))
-                    .text_color(cx.theme().muted_foreground)
-                    .child(messages().mirror_help()),
-            )
             .when(!self.updates.message.is_empty(), |view| {
                 view.child(div().text_size(px(12.)).child(self.updates.message.clone()))
             })
-            .when_some(self.updates.available.as_ref(), |view, available| {
-                let notes = available.manifest.notes_url.clone();
+            .when(self.updates.update_available(), |view| {
                 view.child(
                     h_flex()
-                        .gap(px(8.))
-                        .child(
-                            controls::button("release-notes")
-                                .label(messages().release_notes())
-                                .on_click(move |_, _, cx| cx.open_url(&notes)),
-                        )
+                        .justify_end()
                         .child(if self.updates.installer.is_some() {
                             controls::button("install-update")
                                 .primary()
                                 .label(messages().install_update())
-                                .disabled(busy)
+                                .disabled(self.updates.busy)
                                 .on_click(cx.listener(|this, _, _, cx| this.install_update(cx)))
                         } else {
                             controls::button("download-update")
                                 .primary()
                                 .label(messages().download_update())
-                                .disabled(busy)
+                                .disabled(self.updates.busy)
                                 .on_click(cx.listener(|this, _, _, cx| this.download_update(cx)))
                         }),
                 )
             })
             .into_any_element()
+    }
+}
+
+#[cfg(all(test, feature = "ui-tests"))]
+mod tests {
+    use super::GitPanel;
+    use crate::config::{Config, ConfigStore};
+    use crate::update::{Available, Distribution, Installer, Manifest};
+    use gpui_kit::component::WindowExt;
+    use gpui_kit::{AppContext, TestAppContext, WindowOptions, test::TestWindowExt};
+
+    #[gpui_kit::test]
+    fn update_icon_opens_notes_and_download_progress_in_the_same_dialog(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let directory = tempfile::tempdir().unwrap();
+        let (window, panel) = cx.update(|cx| {
+            gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+                cx.new(|cx| {
+                    GitPanel::new(
+                        ConfigStore {
+                            path: directory.path().join("config.json"),
+                        },
+                        Config::default(),
+                        None,
+                        None,
+                        window,
+                        cx,
+                    )
+                })
+            })
+            .unwrap()
+        });
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            assert!(window.try_find("available-update").is_none());
+            window.click("settings", cx);
+            assert!(window.try_find("settings-scroll").is_some());
+            assert!(window.try_find("update-mode").is_none());
+            assert!(window.try_find("check-update").is_none());
+            window.close_dialog(cx);
+            panel.update(cx, |panel, cx| {
+                panel.updates.available = Some(Available {
+                    distribution: Distribution::Native,
+                    manifest: Manifest {
+                        version: "1.2.3".into(),
+                        notes: "- Faster refresh".into(),
+                        // The worker rejects this fixture before any network request.
+                        notes_url: String::new(),
+                        installer: Installer {
+                            url: String::new(),
+                            size: 100,
+                            sha256: String::new(),
+                        },
+                    },
+                });
+                cx.notify();
+            });
+            window.render_frame(cx);
+            window.click("available-update", cx);
+            assert!(window.try_find("release-notes-body").is_some());
+            assert!(window.try_find("settings-scroll").is_none());
+            assert!(window.try_find("update-progress").is_none());
+            window.click("download-update", cx);
+            assert!(window.try_find("release-notes-body").is_some());
+            assert!(window.try_find("update-progress").is_some());
+            window.close_dialog(cx);
+            window.render_frame(cx);
+            window.click("available-update", cx);
+            assert!(window.try_find("update-progress").is_some());
+        })
+        .unwrap();
     }
 }

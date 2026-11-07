@@ -19,11 +19,6 @@ impl Render for SettingsView {
 
 impl GitPanel {
     pub(super) fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.updates.mirror_input = Some(cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder(messages().mirror_placeholder())
-                .default_value(self.config.updates.mirror.clone())
-        }));
         let parent = cx.entity();
         let content = cx.new(|cx| {
             cx.observe(&parent, |_, _, cx| cx.notify()).detach();
@@ -47,6 +42,7 @@ impl GitPanel {
                 .child(
                     div()
                         .id("settings-scroll")
+                        .test_support()
                         .max_h(px(420.))
                         .overflow_y_scroll()
                         .child(content.clone()),
@@ -216,7 +212,7 @@ impl GitPanel {
                                 ),
                         )
                     })
-                    .when_some(self.error.clone(), |view, error| {
+                    .when_some(self.git_error.clone(), |view, error| {
                         view.child(
                             div()
                                 .text_size(px(12.))
@@ -225,14 +221,12 @@ impl GitPanel {
                         )
                     }),
             )
-            .child(self.update_settings(cx))
             .child(
                 v_flex()
                     .gap(px(4.))
                     .text_size(px(11.))
                     .text_color(cx.theme().muted_foreground)
-                    .child(messages().settings_autosave())
-                    .child(self.store.path.display().to_string()),
+                    .child(messages().settings_autosave()),
             )
             .into_any_element()
     }

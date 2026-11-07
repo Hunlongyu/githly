@@ -10,6 +10,7 @@ use gpui_kit::component::{
     diff::{Diff, DiffMode, DiffState},
     h_flex,
     menu::{DropdownMenu, PopupMenuItem},
+    notification::Notification,
     v_flex,
 };
 use gpui_kit::prelude::FluentBuilder;
@@ -49,9 +50,8 @@ pub struct GitPanel {
     config_error: Option<String>,
     git: Option<Git>,
     repository: Option<Arc<Repository>>,
-    error: Option<String>,
+    git_error: Option<String>,
     detecting: bool,
-    loading: bool,
     stash_tab: bool,
     collapsed_change_groups: [bool; 2],
     change_scope: ChangeScope,
@@ -75,7 +75,7 @@ pub struct GitPanel {
     generation: u64,
     detect_task: Option<Task<()>>,
     load_task: Option<Task<()>>,
-    refresh_task: Option<Task<()>>,
+    refresh_task: Option<auto_refresh::AutoRefresh>,
     project_generation: u64,
     refresh_error: Option<String>,
     window: AnyWindowHandle,
@@ -93,7 +93,7 @@ pub struct GitPanel {
     detail_task: Option<Task<()>>,
     diff_task: Option<Task<()>>,
     save_task: Option<Task<()>>,
-    last_read: Option<String>,
+    last_read: Option<auto_refresh::RepositoryRead>,
     focus: FocusHandle,
     history_focus: FocusHandle,
     files_focus: FocusHandle,
@@ -142,9 +142,8 @@ impl GitPanel {
             config_error,
             git: None,
             repository: None,
-            error: None,
+            git_error: None,
             detecting: false,
-            loading: false,
             stash_tab: false,
             collapsed_change_groups: [false; 2],
             change_scope: ChangeScope::All,
@@ -203,6 +202,10 @@ impl GitPanel {
             updates: updates::UpdateState::default(),
         };
         panel.focus.focus(window, cx);
+        cx.observe_window_activation(window, |panel, _, _| panel.wake_auto_refresh())
+            .detach();
+        cx.observe_window_visibility(window, |panel, _, _, _| panel.wake_auto_refresh())
+            .detach();
         cx.subscribe(
             &panel.branch_picker,
             |this, _, event: &branch_picker::BranchEvent, cx| match event {
@@ -214,9 +217,31 @@ impl GitPanel {
         panel.detect_git(panel.config.git_path.clone(), false, cx);
         panel.save(cx);
         if !cfg!(test) {
-            panel.start_update_timer(cx);
+            panel.check_update(cx);
         }
         panel
+    }
+
+    fn tip(&self, key: &'static str, note: Option<Notification>, cx: &mut Context<Self>) {
+        // A click may already hold the window. Update its overlay after the callback.
+        let window = self.window;
+        cx.defer(move |cx| {
+            let _ = window.update(cx, |_, window, cx| match note {
+                Some(note) => window.push_notification(note.id1::<GitPanel>(key), cx),
+                None => window.remove_notification1::<GitPanel>(key, cx),
+            });
+        });
+    }
+
+    fn clear_recent(&mut self, cx: &mut Context<Self>) {
+        self.config.recent_projects.clear();
+        self.save(cx);
+        self.tip(
+            "recent",
+            Some(Notification::success(messages().recent_cleared())),
+            cx,
+        );
+        cx.notify();
     }
 
     fn save(&mut self, cx: &mut Context<Self>) {
@@ -235,8 +260,11 @@ impl GitPanel {
             let task = executor.spawn(async move { store.save(&config) });
             if let Err(error) = task.await {
                 let _ = this.update(cx, |this, cx| {
-                    this.error = Some(messages().save_failed(error));
-                    cx.notify();
+                    this.tip(
+                        "save",
+                        Some(Notification::error(messages().save_failed(error))),
+                        cx,
+                    );
                 });
             }
         }));
@@ -244,7 +272,7 @@ impl GitPanel {
 
     fn detect_git(&mut self, path: Option<PathBuf>, persist: bool, cx: &mut Context<Self>) {
         self.detecting = true;
-        self.error = None;
+        self.git_error = None;
         let selected = path.clone();
         let task = cx.background_spawn(async move { Git::detect(path).await });
         self.detect_task = Some(cx.spawn(async move |this, cx| {
@@ -263,7 +291,7 @@ impl GitPanel {
                         }
                     }
                     Err(error) => {
-                        this.error = Some(format!("{error:#}"));
+                        this.git_error = Some(format!("{error:#}"));
                     }
                 }
                 cx.notify();
@@ -300,8 +328,11 @@ impl GitPanel {
             }
             Ok(Err(error)) => {
                 let _ = this.update(cx, |this, cx| {
-                    this.error = Some(error.to_string());
-                    cx.notify();
+                    this.tip(
+                        "path-picker",
+                        Some(Notification::error(error.to_string())),
+                        cx,
+                    );
                 });
             }
             _ => {}
@@ -350,36 +381,59 @@ impl GitPanel {
             self.initial_project = Some(path);
             return;
         };
+        let limit = self.initial_history_limit;
+        self.begin_project_load(async move { git.open(&path, limit).await }, cx);
+    }
+
+    fn begin_project_load(
+        &mut self,
+        read: impl Future<Output = anyhow::Result<Repository>> + Send + 'static,
+        cx: &mut Context<Self>,
+    ) {
         self.release_project(cx);
-        self.loading = true;
-        self.error = None;
         self.stash_tab = false;
         let project_generation = self.project_generation;
-        let limit = self.initial_history_limit;
-        let task = cx.background_spawn(async move { git.open(&path, limit).await });
+        let executor = cx.background_executor().clone();
+        let task = cx.background_spawn(read);
         self.load_task = Some(cx.spawn(async move |this, cx| {
-            let result = task.await;
+            let result = futures_lite::future::or(task, async {
+                executor.timer(std::time::Duration::from_millis(250)).await;
+                this.update(cx, |panel, cx| {
+                    if panel.project_generation == project_generation {
+                        panel.tip(
+                            "project",
+                            Some(Notification::info(messages().loading_project()).autohide(false)),
+                            cx,
+                        );
+                    }
+                })?;
+                std::future::pending().await
+            })
+            .await;
             let _ = this.update(cx, |this, cx| {
                 if this.project_generation != project_generation {
                     return;
                 }
-                this.loading = false;
                 match result {
                     Ok(repository) => {
+                        this.tip("project", None, cx);
                         this.config.remember_project(&repository.root);
                         this.branch_picker.update(cx, |picker, cx| {
                             picker.set_branches(repository.branches.clone(), cx);
                         });
                         this.repository = Some(Arc::new(repository));
                         this.filter_history(cx);
-                        this.last_read =
-                            Some(chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
+                        this.record_repository_read(cx);
                         this.save(cx);
                         this.start_auto_refresh(cx);
                         this.update_statistics(true, cx);
                     }
                     Err(error) => {
-                        this.error = Some(format!("{error:#}"));
+                        this.tip(
+                            "project",
+                            Some(Notification::error(format!("{error:#}"))),
+                            cx,
+                        );
                     }
                 }
                 cx.notify();
@@ -620,7 +674,7 @@ impl Render for GitPanel {
                     )
                     .tooltip(messages().last_read(
                         repository.root.display(),
-                        self.last_read.as_deref().unwrap_or("—"),
+                        self.last_read.as_ref().map_or("—", |read| &read.label),
                     ))
                     .dropdown_menu(move |menu, _, _| {
                         let open = view.clone();
@@ -657,9 +711,7 @@ impl Render for GitPanel {
                             .item(PopupMenuItem::new(messages().clear_recent()).on_click(
                                 move |_, _, cx| {
                                     let _ = clear.update(cx, |this, cx| {
-                                        this.config.recent_projects.clear();
-                                        this.save(cx);
-                                        cx.notify();
+                                        this.clear_recent(cx);
                                     });
                                 },
                             ))
@@ -743,6 +795,20 @@ impl Render for GitPanel {
                     .h_full()
                     .window_control_area(WindowControlArea::Drag),
             )
+            .when(self.updates.update_available(), |bar| {
+                bar.child(title_control(
+                    controls::icon_button(
+                        "available-update",
+                        gpui_kit::component::Icon::new(gpui_kit::assets::IconName::CloudDownload)
+                            .text_color(cx.theme().success),
+                    )
+                    .accessibility_label(messages().update_available_tip())
+                    .tooltip(messages().update_available_tip())
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.open_update_dialog(window, cx)),
+                    ),
+                ))
+            })
             .child(title_control(
                 controls::icon_button(
                     "theme",
@@ -763,11 +829,7 @@ impl Render for GitPanel {
             .child(title_control(
                 controls::icon_button("settings", IconName::Settings)
                     .accessibility_label(messages().settings())
-                    .tooltip(if self.updates.available.is_some() {
-                        messages().update_available_tip()
-                    } else {
-                        messages().settings_shortcut()
-                    })
+                    .tooltip(messages().settings_shortcut())
                     .on_click(cx.listener(|this, _, window, cx| this.open_settings(window, cx))),
             ));
         v_flex()
@@ -874,15 +936,6 @@ impl Render for GitPanel {
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
             .child(title_bar::title_bar(title, window, cx))
-            .when(self.switching_branch, |view| {
-                view.child(
-                    div()
-                        .px_3()
-                        .py_1()
-                        .text_xs()
-                        .child(messages().switching_branch()),
-                )
-            })
             .when_some(self.refresh_error.clone(), |view, error| {
                 view.child(
                     div()
@@ -916,18 +969,6 @@ impl Render for GitPanel {
                         .text_color(cx.theme().danger)
                         .child(error),
                 )
-            })
-            .when_some(self.error.clone(), |this, error| {
-                this.child(
-                    div()
-                        .p_3()
-                        .text_sm()
-                        .text_color(cx.theme().danger)
-                        .child(error),
-                )
-            })
-            .when(self.loading, |this| {
-                this.child(div().p_4().child(messages().loading_project()))
             })
             .child(if self.repository.is_some() {
                 self.workspace(window, cx)

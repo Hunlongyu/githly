@@ -49,178 +49,242 @@ fn release(version: &str) -> Reply {
         format!(r#"{{"tag_name":"v{version}","draft":false,"prerelease":false}}"#),
     )
 }
-fn manifest(version: &str, content: &[u8]) -> Vec<u8> {
-    let hash: String = Sha256::digest(content)
+fn checksum(content: &[u8]) -> String {
+    Sha256::digest(content)
         .iter()
         .map(|byte| format!("{byte:02x}"))
-        .collect();
-    serde_json::to_vec(&serde_json::json!({
-        "version": version,
-        "notes_url": format!("{RELEASES}/tag/v{version}"),
-        "installer": { "url": format!("{RELEASES}/download/v{version}/{}", package_name(&Version::parse(version).unwrap())), "size": content.len(), "sha256": hash }
-    })).unwrap()
+        .collect()
+}
+
+fn manifest(distribution: Distribution, version: &str, content: &[u8]) -> Manifest {
+    let version = Version::parse(version).unwrap();
+    Manifest {
+        version: version.to_string(),
+        notes_url: format!("{RELEASES}/tag/v{version}"),
+        notes: "Release notes in the app".into(),
+        installer: Installer {
+            url: format!(
+                "{RELEASES}/download/v{version}/{}",
+                distribution.package_name(&version)
+            ),
+            size: content.len() as u64,
+            sha256: checksum(content),
+        },
+    }
 }
 fn available(content: &[u8]) -> Available {
     Available {
-        manifest: serde_json::from_slice(&manifest("0.2.0", content)).unwrap(),
-        source: Source::Release,
-        mirror: String::new(),
+        manifest: manifest(Distribution::Native, "0.2.0", content),
+        distribution: Distribution::Native,
     }
 }
 
 #[test]
-fn no_update_never_downloads_manifest() {
+fn no_update_never_downloads_a_manifest() {
     let mut fetch = Mock::new(vec![release("0.1.0")]);
-    let result = check_with(&mut fetch, &mut Preferences::default(), "0.1.0", 1000).unwrap();
-    assert!(result.available.is_none());
+    let result = check_with(
+        &mut fetch,
+        &mut Preferences::default(),
+        "0.1.0",
+        1000,
+        Distribution::Native,
+    )
+    .unwrap();
+    assert!(result.is_none());
     assert_eq!(fetch.calls.len(), 1);
 }
 
 #[test]
-fn new_release_uses_matching_manifest_and_rejects_stale_mirror() {
-    let address = format!("{RELEASES}/download/v0.2.0/{}", manifest_name());
-    let mut fetch = Mock::new(vec![
-        release("0.2.0"),
-        reply(&address, 200, manifest("0.2.0", b"installer")),
-    ]);
-    let result = check_with(&mut fetch, &mut Preferences::default(), "0.1.0", 1000).unwrap();
-    assert_eq!(result.available.unwrap().manifest.version, "0.2.0");
-    let mut preferences = Preferences {
-        mirror: "https://mirror.example/".into(),
-        ..Preferences::default()
-    };
-    let mut fetch = Mock::new(vec![
-        release("0.2.0"),
-        reply(&address, 503, vec![]),
-        reply(
-            format!("https://mirror.example/{address}"),
-            200,
-            manifest("0.1.0", b"old"),
-        ),
-    ]);
-    assert!(
-        check_with(&mut fetch, &mut preferences, "0.1.0", 1000)
-            .unwrap_err()
-            .to_string()
-            .contains(messages().mirror_outdated())
+fn github_asset_digest_and_notes_are_used_without_a_second_request() {
+    let expected = available(b"verified");
+    let installer = &expected.manifest.installer;
+    let body = serde_json::json!({"tag_name":"v0.2.0","draft":false,"prerelease":false,"body":"Fixes #20",
+        "assets":[{"browser_download_url":installer.url,"size":installer.size,"digest":format!("sha256:{}",installer.sha256)}]});
+    let mut fetch = Mock::new(vec![reply(API, 200, serde_json::to_vec(&body).unwrap())]);
+    let update = check_with(
+        &mut fetch,
+        &mut Preferences::default(),
+        "0.1.0",
+        1000,
+        Distribution::Native,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(update.manifest.notes, "Fixes #20");
+    assert_eq!(update.manifest.installer.sha256, installer.sha256);
+}
+
+#[test]
+fn rate_limit_uses_official_manifest_and_preserves_server_cooldown() {
+    let distribution = Distribution::Native;
+    let url = format!(
+        "{RELEASES}/latest/download/{}",
+        distribution.manifest_name()
     );
-}
-
-#[test]
-fn rate_limit_uses_release_mirror_and_honors_server_cooldown() {
-    for status in [403, 429] {
-        let mirror = "https://mirror.example/";
-        let address = format!("{mirror}{RELEASES}/latest/download/{}", manifest_name());
-        let mut preferences = Preferences {
-            mirror: mirror.into(),
-            ..Preferences::default()
-        };
-        let mut fetch = Mock::new(vec![
-            reply(API, status, vec![]),
-            reply(&address, 200, manifest("0.2.0", b"exe")),
-        ]);
-        let result = check_with(&mut fetch, &mut preferences, "0.1.0", 1000).unwrap();
-        assert!(matches!(result.source, Source::Mirror(_)));
-        assert_eq!(preferences.api_retry_after, 1500);
-        let mut fetch = Mock::new(vec![reply(&address, 200, manifest("0.2.0", b"exe"))]);
-        check_with(&mut fetch, &mut preferences, "0.1.0", 1100).unwrap();
-        assert!(!fetch.calls.iter().any(|url| url == API));
-    }
-}
-
-#[test]
-fn mirror_failure_is_reported_and_cooldown_survives_failure() {
-    let mut preferences = Preferences {
-        mirror: "https://mirror.example/".into(),
-        ..Preferences::default()
-    };
+    let bytes = serde_json::to_vec(&manifest(distribution, "0.2.0", b"package")).unwrap();
+    let mut prefs = Preferences::default();
     let mut fetch = Mock::new(vec![
         reply(API, 429, vec![]),
-        reply(
-            format!(
-                "https://mirror.example/{RELEASES}/latest/download/{}",
-                manifest_name()
-            ),
-            503,
-            vec![],
-        ),
+        reply(&url, 200, bytes.clone()),
     ]);
-    assert!(check_with(&mut fetch, &mut preferences, "0.1.0", 1000).is_err());
-    assert_eq!(preferences.api_retry_after, 1500);
+    let found = check_with(&mut fetch, &mut prefs, "0.1.0", 1000, distribution)
+        .unwrap()
+        .unwrap();
+    assert_eq!(found.manifest.notes, "Release notes in the app");
+    assert_eq!(prefs.api_retry_after, 1500);
+    let mut fetch = Mock::new(vec![reply(&url, 200, bytes)]);
+    check_with(&mut fetch, &mut prefs, "0.1.0", 1100, distribution).unwrap();
+    let mut failed = Mock::new(vec![reply(&url, 503, vec![])]);
+    assert!(check_with(&mut failed, &mut prefs, "0.1.0", 1200, distribution).is_err());
+    assert_eq!(prefs.api_retry_after, 1500);
 }
 
 #[test]
-fn downloads_retry_mirror_and_verify_before_promoting_file() {
-    let directory = tempfile::tempdir().unwrap();
-    let content = b"test installer";
-    let mut update = available(content);
-    update.mirror = "https://mirror.example/".into();
+fn rejects_stale_manifest_for_known_release() {
+    let mode = Distribution::Native;
+    let url = format!("{RELEASES}/download/v0.2.0/{}", mode.manifest_name());
     let mut fetch = Mock::new(vec![
-        reply(&update.manifest.installer.url, 503, vec![]),
+        release("0.2.0"),
         reply(
-            format!("{}{}", update.mirror, update.manifest.installer.url),
+            &url,
             200,
-            content.to_vec(),
+            serde_json::to_vec(&manifest(mode, "0.1.0", b"stale")).unwrap(),
         ),
     ]);
-    let path = download_with(&mut fetch, &update, directory.path()).unwrap();
+    assert!(check_with(&mut fetch, &mut Preferences::default(), "0.1.0", 1000, mode).is_err());
+}
+
+#[test]
+fn downloads_retry_builtin_mirrors_with_verified_bytes_and_progress() {
+    let directory = tempfile::tempdir().unwrap();
+    let content = b"test installer";
+    let update = available(content);
+    let direct = &update.manifest.installer.url;
+    let mut fetch = Mock::new(vec![
+        reply(direct, 503, vec![]),
+        reply(
+            format!("{}{direct}", MIRRORS[0]),
+            200,
+            b"wrong bytes".to_vec(),
+        ),
+        reply(format!("{}{direct}", MIRRORS[1]), 200, content.to_vec()),
+    ]);
+    let received = AtomicU64::new(500);
+    let path = download_with(&mut fetch, &update, directory.path(), &received).unwrap();
+    assert_eq!(received.load(Ordering::Relaxed), content.len() as u64);
     assert_eq!(std::fs::read(path).unwrap(), content);
     assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
 }
 
 #[test]
-fn truncated_corrupt_and_interrupted_downloads_leave_no_partial_file() {
-    for (bytes, broken) in [
-        (b"exe".to_vec(), false),
-        (b"bad installer".to_vec(), false),
-        (b"test".to_vec(), true),
-    ] {
-        let directory = tempfile::tempdir().unwrap();
-        let update = available(b"test installr");
-        let mut response = reply(&update.manifest.installer.url, 200, bytes);
-        response.broken = broken;
-        let mut fetch = Mock::new(vec![response]);
-        assert!(download_with(&mut fetch, &update, directory.path()).is_err());
-        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
-    }
+fn failed_downloads_leave_no_partial_file() {
+    let directory = tempfile::tempdir().unwrap();
+    let update = available(b"expected");
+    let direct = &update.manifest.installer.url;
+    let mut broken = reply(direct, 200, b"exp".to_vec());
+    broken.broken = true;
+    let mut fetch = Mock::new(vec![
+        broken,
+        reply(
+            format!("{}{direct}", MIRRORS[0]),
+            200,
+            b"expectedly long".to_vec(),
+        ),
+        reply(format!("{}{direct}", MIRRORS[1]), 200, b"mismatch".to_vec()),
+    ]);
+    assert!(download_with(&mut fetch, &update, directory.path(), &AtomicU64::new(0)).is_err());
+    assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
 }
 
 #[test]
-fn manifest_and_mirror_addresses_cannot_supply_arbitrary_executables() {
-    for address in [
-        "http://mirror.example",
-        "https://user:password@mirror.example",
-        "https://mirror.example/?url=",
-    ] {
-        assert!(mirror_prefix(address).is_err());
-    }
+fn rejects_wrong_origin_or_distribution() {
     let mut update = available(b"installer");
     update.manifest.installer.url = "https://other.example/payload.exe".into();
-    assert!(validate(&update.manifest).is_err());
-    let wrong_platform = if cfg!(windows) {
-        "linux-x64.deb"
-    } else {
-        "windows-x64-setup.exe"
-    };
-    update.manifest.installer.url =
-        format!("{RELEASES}/download/v0.2.0/Githly-0.2.0-{wrong_platform}");
-    assert!(validate(&update.manifest).is_err());
+    assert!(validate(&update.manifest, update.distribution).is_err());
+    update.manifest.installer.url = format!(
+        "{RELEASES}/download/v0.2.0/Githly-0.2.0-{}",
+        if cfg!(windows) {
+            "linux-x64.deb"
+        } else {
+            "windows-x64-setup.exe"
+        }
+    );
+    assert!(validate(&update.manifest, update.distribution).is_err());
     update = available(b"installer");
     update.manifest.installer.size = MAX_INSTALLER + 1;
-    assert!(validate(&update.manifest).is_err());
+    assert!(validate(&update.manifest, update.distribution).is_err());
+}
+
+#[test]
+fn legacy_update_settings_keep_only_the_server_cooldown() {
+    let prefs: Preferences = serde_json::from_str(
+        r#"{"enabled":false,"interval_hours":72,"mirror":"https://example.org/","last_check":100,"api_retry_after":123}"#,
+    )
+    .unwrap();
     assert_eq!(
-        mirror_prefix("https://mirror.example/proxy").unwrap(),
-        "https://mirror.example/proxy/"
+        serde_json::to_value(prefs).unwrap(),
+        serde_json::json!({"api_retry_after":123})
     );
 }
 
-#[test]
 #[cfg(windows)]
-fn install_failure_preserves_current_program() {
-    let directory = tempfile::tempdir().unwrap();
-    let update = available(b"not an executable");
-    let path = directory.path().join("invalid.exe");
-    std::fs::write(&path, b"not an executable").unwrap();
-    assert!(install(&path, &update.manifest.installer).is_err());
-    assert!(std::env::current_exe().unwrap().is_file());
+#[test]
+fn portable_channel_never_accepts_the_setup_manifest() {
+    let mode = Distribution::Portable;
+    let zip = manifest(mode, "0.2.0", b"portable");
+    assert_eq!(mode.manifest_name(), "update-windows-x64-portable.json");
+    assert!(zip.installer.url.ends_with("-windows-x64.zip"));
+    assert!(validate(&zip, Distribution::Native).is_err());
+    assert!(validate(&available(b"setup").manifest, mode).is_err());
+}
+
+#[cfg(windows)]
+#[test]
+fn portable_upgrade_replaces_the_running_copy_in_its_own_directory() {
+    const CHILD: &str = "GITHLY_TEST_PORTABLE_ARCHIVE";
+    let mode = Distribution::Portable;
+    if let Some(archive) = std::env::var_os(CHILD) {
+        let path = PathBuf::from(archive);
+        assert_eq!(
+            std::env::current_exe().unwrap().canonicalize().unwrap(),
+            path.with_file_name("My portable Githly.exe")
+                .canonicalize()
+                .unwrap()
+        );
+        let bytes = std::fs::read(&path).unwrap();
+        let available = Available {
+            manifest: manifest(mode, "0.2.0", &bytes),
+            distribution: mode,
+        };
+        assert_eq!(Distribution::current().unwrap(), mode);
+        install(&path, &available).unwrap();
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let exe = dir.path().join("My portable Githly.exe");
+    std::fs::copy(std::env::current_exe().unwrap(), &exe).unwrap();
+    // Another app's uninstaller in the same directory must not change the channel.
+    let unrelated = dir.path().join("unins000.exe");
+    std::fs::write(&unrelated, b"keep").unwrap();
+    let archive = dir.path().join("update.zip");
+    let mut zip = zip::ZipWriter::new(File::create(&archive).unwrap());
+    zip.start_file("Githly.exe", zip::write::SimpleFileOptions::default())
+        .unwrap();
+    let replacement = std::fs::read(
+        PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32/whoami.exe"),
+    )
+    .unwrap();
+    zip.write_all(&replacement).unwrap();
+    drop(zip.finish().unwrap());
+    let status = std::process::Command::new(&exe)
+        .args([
+            "--exact",
+            "update::tests::portable_upgrade_replaces_the_running_copy_in_its_own_directory",
+        ])
+        .env(CHILD, &archive)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    assert_eq!(std::fs::read(exe).unwrap(), replacement);
+    assert_eq!(std::fs::read(unrelated).unwrap(), b"keep");
 }

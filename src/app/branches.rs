@@ -15,7 +15,7 @@ impl GitPanel {
         self.statistics_task = None;
         self.statistics_pending = false;
         let generation = self.project_generation;
-        self.error = None;
+        self.tip("project", None, cx);
         let limit = self.initial_history_limit;
         let task = cx.background_spawn(async move { git.browse(&previous, scope, limit).await });
         self.load_task = Some(cx.spawn(async move |this, cx| {
@@ -26,13 +26,18 @@ impl GitPanel {
                 }
                 match result {
                     Ok(repo) => {
+                        this.record_repository_read(cx);
                         this.close_detail(cx);
                         this.history_scroll = UniformListScrollHandle::new();
                         let retired = this.repository.replace(Arc::new(repo));
                         cx.background_spawn(async move { drop(retired) }).detach();
                         this.filter_history(cx);
                     }
-                    Err(error) => this.error = Some(format!("{error:#}")),
+                    Err(error) => this.tip(
+                        "project",
+                        Some(Notification::error(format!("{error:#}"))),
+                        cx,
+                    ),
                 }
                 this.start_auto_refresh(cx);
                 this.update_statistics(true, cx);
@@ -51,7 +56,11 @@ impl GitPanel {
         let Some(git) = self.git.clone() else { return };
         self.branch_open = false;
         self.switching_branch = true;
-        self.error = None;
+        self.tip(
+            "checkout",
+            Some(Notification::info(messages().switching_branch()).autohide(false)),
+            cx,
+        );
         let path = root.clone();
         let task = cx.background_spawn(async move { git.switch_branch(&root, &name).await });
         // A checkout owns its lifetime independently of selection/project UI.
@@ -66,8 +75,15 @@ impl GitPanel {
                     .is_some_and(|repo| repo.root == path)
                 {
                     match result {
-                        Ok(()) => this.load_project(path, cx),
-                        Err(error) => this.error = Some(format!("{error:#}")),
+                        Ok(()) => {
+                            this.tip("checkout", None, cx);
+                            this.load_project(path, cx);
+                        }
+                        Err(error) => this.tip(
+                            "checkout",
+                            Some(Notification::error(format!("{error:#}"))),
+                            cx,
+                        ),
                     }
                 }
                 cx.notify();

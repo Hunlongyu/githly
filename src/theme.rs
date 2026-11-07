@@ -101,6 +101,8 @@ pub fn apply(mode: ThemeMode, window: Option<&mut Window>, cx: &mut App) {
         c.scrollbar_thumb_hover = color(0x757778, 0x909093);
         c.overlay = rgba(if dark { 0x00000080 } else { 0x00000033 }).into();
         theme.font_size = px(14.);
+        theme.notification.placement = gpui_kit::Anchor::BottomRight;
+        theme.notification.width = px(320.);
         theme.mono_font_size = px(12.);
         theme.radius = px(4.);
         theme.radius_lg = px(8.);

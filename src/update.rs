@@ -1,6 +1,6 @@
 //! Release metadata and bounded downloads. All entry points run on a worker.
 use crate::i18n::messages;
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -8,6 +8,7 @@ use std::{
     fs::File,
     io::Write,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 #[cfg(windows)]
@@ -16,6 +17,8 @@ mod http;
 #[path = "update/unix_http.rs"]
 mod http;
 use http::Http;
+#[cfg(windows)]
+mod portable;
 #[cfg(test)]
 mod tests;
 
@@ -32,45 +35,58 @@ fn platform_id() -> String {
     format!("{}-{arch}", std::env::consts::OS)
 }
 
-fn manifest_name() -> String {
-    // Keep the manifest URL used by already-installed Windows x64 clients.
-    if cfg!(all(windows, target_arch = "x86_64")) {
-        "update.json".into()
-    } else {
-        format!("update-{}.json", platform_id())
-    }
-}
+// Public release-file proxies. Only GitHub supplies the expected asset digest.
+const MIRRORS: &[&str] = &["https://gh-proxy.org/", "https://ghfast.top/"];
 
-fn package_name(version: &Version) -> String {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Distribution {
+    Native,
     #[cfg(windows)]
-    let suffix = "-setup.exe";
-    #[cfg(target_os = "linux")]
-    let suffix = ".deb";
-    #[cfg(target_os = "macos")]
-    let suffix = ".dmg";
-    format!("Githly-{version}-{}{suffix}", platform_id())
+    Portable,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(default)]
-pub struct Preferences {
-    pub enabled: bool,
-    pub interval_hours: u64,
-    pub mirror: String,
-    pub last_check: u64,
-    pub api_retry_after: u64,
-}
+impl Distribution {
+    fn current() -> Result<Self> {
+        #[cfg(windows)]
+        if !portable::is_installed(&std::env::current_exe()?)? {
+            return Ok(Self::Portable);
+        }
+        Ok(Self::Native)
+    }
 
-impl Default for Preferences {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            interval_hours: 24,
-            mirror: String::new(),
-            last_check: 0,
-            api_retry_after: 0,
+    fn manifest_name(self) -> String {
+        #[cfg(windows)]
+        if self == Self::Portable {
+            return format!("update-{}-portable.json", platform_id());
+        }
+
+        // Keep the manifest URL used by already-installed Windows x64 clients.
+        if cfg!(all(windows, target_arch = "x86_64")) {
+            "update.json".into()
+        } else {
+            format!("update-{}.json", platform_id())
         }
     }
+
+    fn package_name(self, version: &Version) -> String {
+        #[cfg(windows)]
+        let suffix = if self == Self::Portable {
+            ".zip"
+        } else {
+            "-setup.exe"
+        };
+        #[cfg(target_os = "linux")]
+        let suffix = ".deb";
+        #[cfg(target_os = "macos")]
+        let suffix = ".dmg";
+        format!("Githly-{version}-{}{suffix}", platform_id())
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Preferences {
+    pub api_retry_after: u64,
 }
 
 pub fn now() -> u64 {
@@ -80,63 +96,26 @@ pub fn now() -> u64 {
         .as_secs()
 }
 
-pub fn mirror_prefix(value: &str) -> Result<String> {
-    let value = value.trim();
-    if value.is_empty() {
-        return Ok(String::new());
-    }
-    let parsed = url::Url::parse(value).context(messages().invalid_mirror())?;
-    ensure!(
-        parsed.scheme() == "https"
-            && parsed.host_str().is_some()
-            && parsed.username().is_empty()
-            && parsed.password().is_none()
-            && parsed.query().is_none()
-            && parsed.fragment().is_none(),
-        messages().mirror_https()
-    );
-    Ok(format!("{}/", parsed.as_str().trim_end_matches('/')))
-}
-
 #[derive(Clone, Debug, Deserialize)]
+#[cfg_attr(test, derive(Serialize))]
 pub struct Installer {
     pub url: String,
     pub sha256: String,
     pub size: u64,
 }
 #[derive(Clone, Debug, Deserialize)]
+#[cfg_attr(test, derive(Serialize))]
 pub struct Manifest {
     pub version: String,
     pub notes_url: String,
+    #[serde(default)]
+    pub notes: String,
     pub installer: Installer,
 }
 #[derive(Clone, Debug)]
 pub struct Available {
     pub manifest: Manifest,
-    pub source: Source,
-    pub mirror: String,
-}
-#[derive(Debug)]
-pub struct Check {
-    pub available: Option<Available>,
-    pub source: Source,
-}
-
-#[derive(Clone, Debug)]
-pub enum Source {
-    GitHub,
-    Release,
-    Mirror(String),
-}
-
-impl std::fmt::Display for Source {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::GitHub => f.write_str("GitHub"),
-            Self::Release => f.write_str("GitHub Release"),
-            Self::Mirror(prefix) => f.write_str(&messages().mirror_source(prefix)),
-        }
-    }
+    pub distribution: Distribution,
 }
 
 #[derive(Default)]
@@ -155,7 +134,7 @@ fn metadata(fetch: &mut impl Fetch, address: &str) -> Result<(Response, Vec<u8>)
     Ok((response, bytes))
 }
 
-fn validate(manifest: &Manifest) -> Result<Version> {
+fn validate(manifest: &Manifest, distribution: Distribution) -> Result<Version> {
     let version = Version::parse(&manifest.version).context(messages().invalid_version())?;
     ensure!(
         version.pre.is_empty() && version.build.is_empty(),
@@ -167,7 +146,10 @@ fn validate(manifest: &Manifest) -> Result<Version> {
     );
     ensure!(
         manifest.installer.url
-            == format!("{RELEASES}/download/v{version}/{}", package_name(&version)),
+            == format!(
+                "{RELEASES}/download/v{version}/{}",
+                distribution.package_name(&version)
+            ),
         messages().invalid_installer_url()
     );
     ensure!(
@@ -186,8 +168,31 @@ fn validate(manifest: &Manifest) -> Result<Version> {
     Ok(version)
 }
 
-pub fn check(preferences: &mut Preferences) -> Result<Check> {
-    check_with(&mut Http, preferences, env!("CARGO_PKG_VERSION"), now())
+#[derive(Deserialize)]
+struct Release {
+    tag_name: String,
+    draft: bool,
+    prerelease: bool,
+    body: Option<String>,
+    #[serde(default)]
+    assets: Vec<Asset>,
+}
+
+#[derive(Deserialize)]
+struct Asset {
+    browser_download_url: String,
+    size: u64,
+    digest: Option<String>,
+}
+
+pub fn check(preferences: &mut Preferences) -> Result<Option<Available>> {
+    check_with(
+        &mut Http,
+        preferences,
+        env!("CARGO_PKG_VERSION"),
+        now(),
+        Distribution::current()?,
+    )
 }
 
 fn check_with(
@@ -195,20 +200,14 @@ fn check_with(
     preferences: &mut Preferences,
     current: &str,
     time: u64,
-) -> Result<Check> {
-    let mirror = mirror_prefix(&preferences.mirror)?;
+    distribution: Distribution,
+) -> Result<Option<Available>> {
     let current = Version::parse(current)?;
     let mut expected = None;
-    let mut fallback = time < preferences.api_retry_after;
-    if !fallback {
+    let mut notes = String::new();
+    if time >= preferences.api_retry_after {
         match metadata(fetch, API) {
             Ok((response, bytes)) if response.status == 200 => {
-                #[derive(Deserialize)]
-                struct Release {
-                    tag_name: String,
-                    draft: bool,
-                    prerelease: bool,
-                }
                 let release: Release =
                     serde_json::from_slice(&bytes).context(messages().invalid_release())?;
                 ensure!(
@@ -222,81 +221,101 @@ fn check_with(
                         .unwrap_or(&release.tag_name),
                 )?;
                 if version <= current {
-                    return Ok(Check {
-                        available: None,
-                        source: Source::GitHub,
-                    });
+                    return Ok(None);
+                }
+                notes = release.body.unwrap_or_default();
+                let url = format!(
+                    "{RELEASES}/download/v{version}/{}",
+                    distribution.package_name(&version)
+                );
+                if let Some(asset) = release
+                    .assets
+                    .iter()
+                    .find(|asset| asset.browser_download_url == url)
+                    && let Some(hash) = asset
+                        .digest
+                        .as_deref()
+                        .and_then(|digest| digest.strip_prefix("sha256:"))
+                {
+                    let manifest = Manifest {
+                        version: version.to_string(),
+                        notes_url: format!("{RELEASES}/tag/v{version}"),
+                        notes,
+                        installer: Installer {
+                            url,
+                            size: asset.size,
+                            sha256: hash.into(),
+                        },
+                    };
+                    validate(&manifest, distribution)?;
+                    return Ok(Some(Available {
+                        manifest,
+                        distribution,
+                    }));
                 }
                 expected = Some(version);
             }
-            Ok((response, _)) => {
-                if response.status == 403 || response.status == 429 {
-                    preferences.api_retry_after = response
-                        .rate_reset
-                        .unwrap_or(0)
-                        .max(time.saturating_add(response.retry_after.unwrap_or(3600)))
-                        .max(time.saturating_add(60));
-                }
-                fallback = true;
+            Ok((response, _)) if matches!(response.status, 403 | 429) => {
+                preferences.api_retry_after = response
+                    .rate_reset
+                    .unwrap_or(0)
+                    .max(time.saturating_add(response.retry_after.unwrap_or(3600)))
+                    .max(time.saturating_add(60));
             }
-            Err(_) => fallback = true,
+            _ => {}
         }
     }
-    let manifest_file = manifest_name();
-    let direct = expected.as_ref().map_or_else(
-        || format!("{RELEASES}/latest/download/{manifest_file}"),
-        |version| format!("{RELEASES}/download/v{version}/{manifest_file}"),
+
+    let name = distribution.manifest_name();
+    let url = expected.as_ref().map_or_else(
+        || format!("{RELEASES}/latest/download/{name}"),
+        |v| format!("{RELEASES}/download/v{v}/{name}"),
     );
-    let mut used_mirror = fallback && !mirror.is_empty();
-    let address = if used_mirror {
-        format!("{mirror}{direct}")
-    } else {
-        direct.clone()
-    };
-    let first = metadata(fetch, &address);
-    let (response, bytes) = match first {
-        Ok((response, bytes)) if response.status == 200 => (response, bytes),
-        failed if !used_mirror && !mirror.is_empty() => {
-            drop(failed);
-            used_mirror = true;
-            metadata(fetch, &format!("{mirror}{direct}"))?
-        }
-        Ok((response, _)) => bail!(messages().release_unavailable(response.status)),
-        Err(error) => return Err(error),
-    };
+    let (response, bytes) = metadata(fetch, &url)?;
     ensure!(
         response.status == 200,
         messages().source_unavailable(response.status)
     );
-    let manifest: Manifest =
+    let mut manifest: Manifest =
         serde_json::from_slice(&bytes).context(messages().invalid_manifest())?;
-    let version = validate(&manifest)?;
-    if let Some(expected) = expected {
-        ensure!(version == expected, messages().mirror_outdated());
+    let version = validate(&manifest, distribution)?;
+    ensure!(
+        expected.is_none_or(|expected| expected == version),
+        messages().invalid_manifest()
+    );
+    if !notes.is_empty() {
+        manifest.notes = notes;
     }
-    let source = if used_mirror {
-        Source::Mirror(mirror.clone())
-    } else {
-        Source::Release
-    };
-    Ok(Check {
-        available: (version > current).then(|| Available {
-            manifest,
-            source: source.clone(),
-            mirror,
-        }),
-        source,
-    })
+    Ok((version > current).then_some(Available {
+        manifest,
+        distribution,
+    }))
 }
 
-pub fn download(available: &Available) -> Result<PathBuf> {
+pub fn download(available: &Available, received: &AtomicU64) -> Result<PathBuf> {
     let directory = directories::BaseDirs::new()
         .context(messages().update_cache_dir())?
         .cache_dir()
         .join("githly")
         .join("updates");
     std::fs::create_dir_all(&directory)?;
-    download_with(&mut Http, available, &directory)
+    download_with(&mut Http, available, &directory, received)
+}
+
+struct DownloadWriter<'a> {
+    file: File,
+    received: &'a AtomicU64,
+}
+
+impl Write for DownloadWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let count = self.file.write(bytes)?;
+        self.received.fetch_add(count as u64, Ordering::Relaxed);
+        Ok(count)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.flush()
+    }
 }
 
 struct PartialFile(PathBuf);
@@ -310,18 +329,10 @@ fn download_with(
     fetch: &mut impl Fetch,
     available: &Available,
     directory: &Path,
+    received: &AtomicU64,
 ) -> Result<PathBuf> {
-    validate(&available.manifest)?;
-    let mirror = mirror_prefix(&available.mirror)?;
+    validate(&available.manifest, available.distribution)?;
     let direct = &available.manifest.installer.url;
-    let mirrored = format!("{mirror}{direct}");
-    let urls: Vec<&str> = if mirror.is_empty() {
-        vec![direct]
-    } else if matches!(available.source, Source::Mirror(_)) {
-        vec![&mirrored, direct]
-    } else {
-        vec![direct, &mirrored]
-    };
     // A single fixed cache entry bounds disk usage across versions. Unique partial
     // files prevent a second application instance from sharing an active writer.
     let partial = PartialFile(directory.join(format!("installer-{}.part", std::process::id())));
@@ -330,21 +341,23 @@ fn download_with(
         .expect("validated package URL has an extension");
     let destination = directory.join("Githly-update").with_extension(extension);
     let mut error = anyhow::anyhow!(messages().installer_failed());
-    for url in urls {
+    for prefix in std::iter::once(&"").chain(MIRRORS) {
+        let url = format!("{prefix}{direct}");
+        received.store(0, Ordering::Relaxed);
         let result = (|| {
-            let mut file = File::create(&partial.0)?;
-            let response = fetch.get(url, &mut file, available.manifest.installer.size)?;
+            let mut writer = DownloadWriter {
+                file: File::create(&partial.0)?,
+                received,
+            };
+            let response = fetch.get(&url, &mut writer, available.manifest.installer.size)?;
             ensure!(
                 response.status == 200,
                 messages().download_http(response.status)
             );
-            file.sync_all()?;
-            drop(file);
+            writer.file.sync_all()?;
+            drop(writer);
             verify_file(&partial.0, &available.manifest.installer)?;
-            if destination.exists() {
-                std::fs::remove_file(&destination).context(messages().installer_in_use())?;
-            }
-            std::fs::rename(&partial.0, &destination)?;
+            std::fs::rename(&partial.0, &destination).context(messages().installer_in_use())?;
             Ok(destination.clone())
         })();
         match result {
@@ -356,8 +369,11 @@ fn download_with(
 }
 
 pub fn verify_file(path: &Path, installer: &Installer) -> Result<()> {
+    verify_reader(&mut File::open(path)?, installer)
+}
+
+fn verify_reader(file: &mut File, installer: &Installer) -> Result<()> {
     use std::io::Read;
-    let mut file = File::open(path)?;
     ensure!(
         file.metadata()?.len() == installer.size,
         messages().installer_incomplete()
@@ -383,8 +399,18 @@ pub fn verify_file(path: &Path, installer: &Installer) -> Result<()> {
     Ok(())
 }
 
-pub fn install(path: &Path, installer: &Installer) -> Result<()> {
-    verify_file(path, installer)?;
+pub fn install(path: &Path, available: &Available) -> Result<()> {
+    let distribution = Distribution::current()?;
+    ensure!(
+        distribution == available.distribution,
+        messages().invalid_installer_url()
+    );
+    validate(&available.manifest, distribution)?;
+    #[cfg(windows)]
+    if distribution == Distribution::Portable {
+        return portable::apply(path, &available.manifest.installer);
+    }
+    verify_file(path, &available.manifest.installer)?;
     #[cfg(unix)]
     {
         let opener = if cfg!(target_os = "macos") {
@@ -405,9 +431,7 @@ pub fn install(path: &Path, installer: &Installer) -> Result<()> {
         // The normal installer keeps errors visible and uses Restart Manager to close
         // applications gracefully. No shell, forced termination, or silent overwrite.
         command.arg("/UPDATE").arg("/NORESTART");
-        if let Some(directory) = std::env::current_exe()?.parent()
-            && directory.join("unins000.exe").is_file()
-        {
+        if let Some(directory) = std::env::current_exe()?.parent() {
             command.arg(format!("/DIR={}", directory.display()));
         }
         command

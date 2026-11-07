@@ -44,16 +44,16 @@
 
 ## 核心特性
 
-- **专为 AI 与命令行流程设计** — 前台约每 15 秒、后台约每 60 秒自动核对本地状态，不争抢仓库锁，也不干扰外部 Git 操作。
+- **专为 AI 与命令行流程设计** — 前台约每 3 秒、后台约每 600 秒自动核对本地状态，不争抢仓库锁，也不干扰外部 Git 操作。
 - **保留阅读位置与快照** — 后台发生代码变更时，已打开的 Diff 视图会保留当前阅读位置与快照；浏览较早历史时若有新提交产生，会温和提示而不强行跳转视口。
 - **双栏文本与图片 Diff** — 支持按「全部」「未暂存」「已暂存」查看变更，提供变化位置快速跳转，并支持常见图片格式（`PNG`、`JPEG`、`GIF`、`WebP`、`BMP`、`ICO`、`TIFF`、`SVG`）修改前后并排预览。
 - **流式分支关系图** — 支持当前分支、指定分支或全部分支的关系图与列表视图切换，随滚动按需流式续载历史记录。
 - **Stash 与 Worktree 浏览** — 直接查看 Stash 中保存的文件及差异（含未跟踪文件），并通过顶栏菜单查看和打开其他 Git Worktree 工作目录。
-- **Rust + GPUI 原生性能** — 异步调用系统 `git.exe`，配合视口虚拟化列表与严格的内存预算，保持轻量响应。
+- **Rust + GPUI 原生性能** — 异步调用系统 Git，配合视口虚拟化列表与严格的内存预算，保持轻量响应。
 
 ## 下载与安装
 
-各平台均需安装 Git。如果环境变量中找不到 Git，可在设置中选择可执行文件。Windows x64 已有正式版，首批 macOS 和 Linux 安装包通过 CI 提供。
+各平台均需安装 Git。如果环境变量中找不到 Git，可在设置中选择可执行文件。
 
 Githly 默认按系统语言偏好顺序选择简体中文或英文，均不匹配时使用英文。在 **设置 → 语言** 中可手动切换，重启 Githly 后生效。
 
@@ -61,15 +61,12 @@ Githly 默认按系统语言偏好顺序选择简体中文或英文，均不匹�
 
 | 版本类型 | 文件名后缀 | 启动与使用方式 |
 | --- | --- | --- |
-| **安装版** *（推荐）* | `-windows-x64-setup.exe` | 运行安装程序，跟随向导为当前用户安装（无需管理员权限），之后从开始菜单打开 **Githly**。 |
-| **便携版** | `-windows-x64.zip` | 解压压缩包到任意目录，直接运行其中的 `Githly.exe`。 |
+| **Windows x64 安装版** | `-windows-x64-setup.exe` | 为当前用户安装后，从开始菜单或桌面快捷方式打开 **Githly**。 |
+| **Windows x64 便携版** | `-windows-x64.zip` | 解压到任意目录，直接运行其中的 `Githly.exe`。 |
+| **macOS** | `-macos-arm64.dmg`（Apple Silicon）或 `-macos-x64.dmg`（Intel） | 打开 DMG，将 Githly 拖入「应用程序」。应用使用临时签名，尚未经过 Apple 公证。 |
+| **Ubuntu 24.04 amd64** | `-linux-x64.deb` | 在下载目录运行 `sudo apt install ./Githly-*-linux-x64.deb`，之后从应用菜单或通过 `githly /path/to/repository` 启动。需要 Vulkan 驱动和 X11 或 Wayland。 |
 
-**CI 测试包**：登录 GitHub，打开 main 分支成功的构建，在 Artifacts 中下载，保留 14 天。[Windows 构建](https://github.com/Hunlongyu/githly/actions/workflows/windows.yml)包含安装包和便携 ZIP。[macOS 和 Linux 构建](https://github.com/Hunlongyu/githly/actions/workflows/desktop.yml)提供以下测试包。
-
-| 测试包 | 安装方法 |
-| --- | --- |
-| `macos-arm64` / `macos-x64` | 分别适用于 Apple Silicon 和 Intel。解压后打开 DMG，将 Githly 拖入「应用程序」。测试包使用临时签名，尚未进行 Apple 公证。 |
-| `linux-x64` | 在 Ubuntu 24.04 amd64 上解压，在该目录运行 `sudo apt install ./Githly-*-linux-x64.deb`。可通过应用菜单或 `githly /path/to/repository` 启动，需要 Vulkan 驱动和 X11 或 Wayland。 |
+登录 GitHub 后，也可在 main 分支成功构建的 Artifacts 中下载测试包，保留 14 天。[Windows 构建](https://github.com/Hunlongyu/githly/actions/workflows/windows.yml) · [macOS 和 Linux 构建](https://github.com/Hunlongyu/githly/actions/workflows/desktop.yml)
 
 macOS 上的应用快捷键使用 Command，对应下文的 Ctrl。
 
@@ -89,7 +86,7 @@ macOS 上的应用快捷键使用 Command，对应下文的 Ctrl。
 | **改动有多大** | 「更改」面板按已跟踪和未跟踪文件分组，支持路径筛选，并在后台异步计算单文件及合计增删行数。 |
 | **分支如何分叉、合并** | 历史支持切换「关系图」和「列表」，可选当前分支、指定分支或全部分支。首批按列表高度读取约两屏，滚动到距末尾约半屏时自动续载（每批最多 100 条）。搜索范围限定在已加载的提交。 |
 | **分支与上游相差多少** | 顶栏显示领先、落后提交数。远程跟踪分支及计数基于本地引用，外部工具执行 `git fetch` 后面板会在下次刷新时自动更新。 |
-| **阅读期间仓库又有了修改** | 前台约每 15 秒核对本地状态，后台约每 60 秒核对一次。浏览较早历史时会提示有新提交，回到顶部即可更新。已打开的差异保留阅读位置，重新选择文件即可查看最新内容。 |
+| **阅读期间仓库又有了修改** | 前台约每 3 秒核对一次本地状态，后台约每 10 分钟核对一次。窗口重新聚焦时，距上次成功读取满 3 秒就立即核对。浏览较早历史时会提示有新提交，回到顶部即可更新。已打开的差异保留阅读位置，重新选择文件即可查看最新内容。 |
 | **一次提交具体改了什么** | 查看完整提交正文和逐文件双栏等宽文本差异（含行号与增删标色）。常见图片可并排预览修改前后版本，`GIF` 和 `WebP` 显示首帧。 |
 | **Stash 和其他工作目录里有什么** | 「Stash」可查看保存的文件清单及差异，包括保存时的未跟踪文件。顶栏的 `worktree` 菜单可查看其他工作目录的路径、分支和更改状态，并直接打开对应目录。 |
 
@@ -97,13 +94,9 @@ macOS 上的应用快捷键使用 Command，对应下文的 Ctrl。
 
 ## 软件更新
 
-按 `Ctrl+,` 打开设置，在「软件更新」中可以立即检查更新，也可选择**每天**（默认）、**每三天**、**每周**或**仅手动检查**。更新来源为 GitHub 正式 Release。
+Githly 启动时自动检查更新。有新版本时，窗口右上角会出现下载图标。点击图标即可查看更新日志，再点「下载更新」会显示进度条、百分比和已下载量。关闭弹窗后下载会继续，可从同一图标重新查看。
 
-发现新版本后：
-- 点击「更新说明」查看版本变化，或点击「下载更新」。
-- 客户端核对本机平台安装包的大小和 `SHA-256` 后显示「安装更新…」。Windows 打开安装向导，macOS 打开磁盘映像，Linux 交由桌面包管理器处理。
-- 便携版用户若想保留解压即用的方式，可前往发布页直接下载新版 ZIP。
-- 设置中也支持配置 GitHub API 限流时使用的可信 HTTPS Release 镜像前缀，详见 **[发布与更新说明](docs/releases.md)**。
+Windows 安装版通过安装向导升级，并创建桌面快捷方式。便携版下载 ZIP，在原目录替换程序，重启后生效。macOS 和 Linux 打开相应平台的安装包。直连下载失败时，Githly 自动尝试内置镜像，并使用 GitHub 提供的文件大小和 SHA-256 校验下载内容。
 
 ## 快捷键与数据位置
 
@@ -119,7 +112,7 @@ macOS 上的应用快捷键使用 Command，对应下文的 Ctrl。
 
 macOS 在 `~/Library/Application Support/githly` 保存配置和日志。Linux 使用 XDG 配置和数据目录，默认分别为 `~/.config/githly` 和 `~/.local/share/githly`。Windows 路径如下。
 
-- **配置文件：** `%APPDATA%\githly\config.json`（保存最近项目、主题、面板尺寸、Git 路径和更新偏好）。
+- **配置文件：** `%APPDATA%\githly\config.json`（保存最近项目、主题、面板尺寸和 Git 路径）。
 - **运行日志：** `%LOCALAPPDATA%\githly\logs`（遇到读取或更新错误时可在此查看诊断日志）。
 
 ## 从源码构建

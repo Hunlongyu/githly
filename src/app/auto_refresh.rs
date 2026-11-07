@@ -1,16 +1,40 @@
 use super::*;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-const ACTIVE_INTERVAL: Duration = Duration::from_secs(15);
-const IDLE_INTERVAL: Duration = Duration::from_secs(60);
+const ACTIVE_INTERVAL: Duration = Duration::from_secs(3);
+const IDLE_INTERVAL: Duration = Duration::from_secs(600);
+
+pub(super) struct RepositoryRead {
+    finished_at: Instant,
+    pub(super) label: String,
+}
+
+pub(super) struct AutoRefresh {
+    wake: async_channel::Sender<()>,
+    _task: Task<()>,
+}
 
 impl GitPanel {
+    pub(super) fn record_repository_read(&mut self, cx: &Context<Self>) {
+        self.last_read = Some(RepositoryRead {
+            finished_at: cx.background_executor().now(),
+            label: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+        });
+    }
+
+    pub(super) fn wake_auto_refresh(&self) {
+        if let Some(refresh) = &self.refresh_task {
+            let _ = refresh.wake.try_send(());
+        }
+    }
+
     pub(super) fn release_project(&mut self, cx: &mut Context<Self>) {
         self.project_generation = self.project_generation.wrapping_add(1);
         self.refresh_task = None;
         self.reset_history_reader(cx);
         self.load_task = None;
-        self.loading = false;
+        self.tip("project", None, cx);
+        self.tip("checkout", None, cx);
         self.refresh_error = None;
         self.branch_open = false;
         self.statistics_task = None;
@@ -38,42 +62,67 @@ impl GitPanel {
         let generation = self.project_generation;
         let window = self.window;
         let executor = cx.background_executor().clone();
-        self.refresh_task = Some(cx.spawn(async move |this, cx| {
+        let mut last_success = self
+            .last_read
+            .as_ref()
+            .map_or_else(|| executor.now(), |read| read.finished_at);
+        let mut interval_start = last_success;
+        let (wake, changes) = async_channel::bounded(1);
+        let task = cx.spawn(async move |this, cx| {
+            let mut was_active = false;
             loop {
-                let Ok(delay) = this.update(cx, |this, cx| {
-                    let active = window
-                        .update(cx, |_, window, _| {
-                            window.is_visible() && window.is_window_active()
-                        })
-                        .unwrap_or(false);
-                    if active && this.refresh_error.is_none() {
-                        ACTIVE_INTERVAL
-                    } else {
-                        IDLE_INTERVAL
-                    }
+                let Ok(active) = window.update(cx, |_, window, _| {
+                    window.is_visible() && window.is_window_active()
                 }) else {
                     break;
                 };
-                executor.timer(delay).await;
-                let Ok(Some((git, previous))) = this.update(cx, |this, _| {
-                    if this.project_generation != generation {
-                        return None;
-                    }
-                    Some((this.git.clone()?, this.repository.clone()?))
-                }) else {
-                    break;
+                let interval = if active {
+                    ACTIVE_INTERVAL
+                } else {
+                    IDLE_INTERVAL
                 };
-                let Ok(Some((update_history, initial_limit))) = this.update(cx, |this, _| {
-                    if this.history_loading {
-                        return None;
-                    }
-                    Some((
-                        this.history_scroll.0.borrow().base_handle.offset().y
-                            >= px(-view::HISTORY_ROW_HEIGHT),
-                        this.initial_history_limit,
-                    ))
-                }) else {
+                if active && !was_active {
+                    interval_start = last_success;
+                }
+                was_active = active;
+                let delay = (interval_start + interval).saturating_duration_since(executor.now());
+                if !delay.is_zero() {
+                    // A window transition interrupts the wait, never an in-flight Git read.
+                    futures_lite::future::or(
+                        async {
+                            executor.timer(delay).await;
+                        },
+                        async {
+                            let _ = changes.recv().await;
+                        },
+                    )
+                    .await;
                     continue;
+                }
+                let Ok(history_loading) = this.read_with(cx, |this, _| this.history_loading) else {
+                    break;
+                };
+                if history_loading {
+                    if changes.recv().await.is_err() {
+                        break;
+                    }
+                    continue;
+                }
+                let Ok(Some((git, previous, update_history, initial_limit))) =
+                    this.read_with(cx, |this, _| {
+                        if this.project_generation != generation {
+                            return None;
+                        }
+                        Some((
+                            this.git.clone()?,
+                            this.repository.clone()?,
+                            this.history_scroll.0.borrow().base_handle.offset().y
+                                >= px(-view::HISTORY_ROW_HEIGHT),
+                            this.initial_history_limit,
+                        ))
+                    })
+                else {
+                    break;
                 };
                 let baseline_history = previous.commits.clone();
                 // One task owns both timer and query. No tick queue, overlap,
@@ -83,6 +132,10 @@ impl GitPanel {
                         async move { git.refresh(&previous, update_history, initial_limit).await },
                     )
                     .await;
+                interval_start = executor.now();
+                if result.is_ok() {
+                    last_success = interval_start;
+                }
                 let Ok(retired) = this.update(cx, |this, cx| {
                     if this.project_generation != generation {
                         return None;
@@ -103,8 +156,7 @@ impl GitPanel {
                     match result {
                         Ok(next) => {
                             let recovered = this.refresh_error.take().is_some();
-                            this.last_read =
-                                Some(chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
+                            this.record_repository_read(cx);
                             let retired = next.and_then(|repo| this.apply_refresh(repo, cx));
                             if recovered {
                                 cx.notify();
@@ -126,7 +178,8 @@ impl GitPanel {
                 };
                 executor.spawn(async move { drop(retired) }).await;
             }
-        }));
+        });
+        self.refresh_task = Some(AutoRefresh { wake, _task: task });
     }
 
     pub(super) fn apply_refresh(

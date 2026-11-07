@@ -1,5 +1,19 @@
 # 更新日志
 
+## v0.1.2 · 2026-11-07
+
+- 首次发布 macOS 的 Apple Silicon、Intel 两种 DMG，以及 Ubuntu 24.04 amd64 的 Debian 包。macOS 应用使用临时签名，尚未经过 Apple 公证。
+- 启动时自动检查更新。有新版本时，点击右上角更新图标即可在应用内阅读更新说明，点击下载可查看进度。下载支持内置镜像，并按官方清单校验 SHA-256。
+- Windows 安装版升级时创建桌面快捷方式。便携版在原目录更新。**正在使用 v0.1.1 或更早便携版的用户**，请退出 Githly，手动下载本版 ZIP 并解压到原目录；后续版本可在应用内升级。
+- 仓库状态在前台每 3 秒、后台每 10 分钟核对一次。窗口重新聚焦时，距上次成功读取满 3 秒才立即核对。打开较慢的项目时会在右下角显示提示，空 Stash 提示改为在列表中居中显示。
+
+**English**
+
+- Native packages are available for macOS on Apple Silicon and Intel (DMG) and for Ubuntu 24.04 amd64 (Debian package). The macOS app is ad-hoc signed and has not been notarized by Apple.
+- Githly checks for updates at startup. When an update is available, click the icon in the upper right to read the release notes, then click Download to see progress. Downloads support built-in mirrors and are verified against the SHA-256 digest in the official manifest.
+- Windows installer upgrades create a desktop shortcut. Portable upgrades keep the app in its existing folder. **If you use portable v0.1.1 or earlier**, quit Githly and extract this release’s ZIP into your current folder. Subsequent portable updates can be applied in the app.
+- Githly checks repository status every 3 seconds in the foreground and every 10 minutes in the background. Refocusing checks immediately if the last successful read was at least 3 seconds ago. Slow project opens show a tip in the lower right, and the empty Stash message is centered in the list.
+
 ## v0.1.1 · 2026-11-07
 
 - 界面支持简体中文和英文，默认跟随系统语言。在「设置 → 语言」中可手动选择，重启后生效。
