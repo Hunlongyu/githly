@@ -153,6 +153,23 @@ impl GitPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let mut panel = Self::new_idle(store, config, config_error, initial_project, window, cx);
+        panel.detect_git(panel.config.git_path.clone(), false, cx);
+        panel.save(cx);
+        if !cfg!(test) {
+            panel.check_update(cx);
+        }
+        panel
+    }
+
+    fn new_idle(
+        store: ConfigStore,
+        config: Config,
+        config_error: Option<LocalizedText>,
+        initial_project: Option<PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let file_search =
             cx.new(|cx| InputState::new(window, cx).placeholder(messages().filter_paths()));
         let history_search =
@@ -171,7 +188,7 @@ impl GitPanel {
             }
         })
         .detach();
-        let mut panel = Self {
+        let panel = Self {
             store,
             config,
             config_error,
@@ -251,11 +268,6 @@ impl GitPanel {
             },
         )
         .detach();
-        panel.detect_git(panel.config.git_path.clone(), false, cx);
-        panel.save(cx);
-        if !cfg!(test) {
-            panel.check_update(cx);
-        }
         panel
     }
 

@@ -22,14 +22,11 @@ fn slow_project_open_uses_a_bottom_right_tip_without_moving_the_welcome_page(
     let (window, panel) = cx.update(|cx| {
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
             cx.new(|cx| {
-                GitPanel::new(
+                GitPanel::new_idle(
                     ConfigStore {
                         path: directory.path().join("config.json"),
                     },
-                    Config {
-                        git_path: Some(directory.path().join("missing-git")),
-                        ..Config::default()
-                    },
+                    Config::default(),
                     None,
                     None,
                     window,
@@ -40,8 +37,6 @@ fn slow_project_open_uses_a_bottom_right_tip_without_moving_the_welcome_page(
         .unwrap()
     });
     panel.update(cx, |panel, cx| {
-        panel.detect_task = None;
-        panel.detecting = false;
         panel.git = Some(git);
         panel.begin_project_load(async move { Ok(read.recv().await?) }, cx);
     });
@@ -250,7 +245,7 @@ fn change_groups_scroll_together_with_visible_headers(cx: &mut TestAppContext) {
             cx,
             |window, cx| {
                 cx.new(|cx| {
-                    let mut panel = GitPanel::new(
+                    let mut panel = GitPanel::new_idle(
                         ConfigStore {
                             path: directory.path().join("config.json"),
                         },
@@ -260,8 +255,6 @@ fn change_groups_scroll_together_with_visible_headers(cx: &mut TestAppContext) {
                         window,
                         cx,
                     );
-                    panel.detect_task = None;
-                    panel.detecting = false;
                     panel.git = Some(git);
                     panel.repository = Some(Arc::new(repo));
                     panel.filter_history(cx);
@@ -482,7 +475,7 @@ fn stash_empty_state_is_centered_and_gives_way_to_the_list(cx: &mut TestAppConte
     let (window, panel) = cx.update(|cx| {
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
             cx.new(|cx| {
-                let mut panel = GitPanel::new(
+                let mut panel = GitPanel::new_idle(
                     ConfigStore {
                         path: directory.path().join("config.json"),
                     },
@@ -492,7 +485,6 @@ fn stash_empty_state_is_centered_and_gives_way_to_the_list(cx: &mut TestAppConte
                     window,
                     cx,
                 );
-                panel.detect_task = None;
                 panel.git = Some(git);
                 panel.repository = Some(Arc::new(repo));
                 panel.filter_history(cx);
@@ -572,7 +564,7 @@ fn refresh_keeps_commit_diff_and_scroll_anchor_and_close_releases_session(cx: &m
     let (window, panel) = cx.update(|cx| {
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
             cx.new(|cx| {
-                let mut panel = GitPanel::new(
+                let mut panel = GitPanel::new_idle(
                     ConfigStore {
                         path: directory.path().join("test-config.json"),
                     },
@@ -582,8 +574,6 @@ fn refresh_keeps_commit_diff_and_scroll_anchor_and_close_releases_session(cx: &m
                     window,
                     cx,
                 );
-                panel.detect_task = None;
-                panel.detecting = false;
                 panel.git = Some(git.clone());
                 panel.selected_commit = Some(previous.commits[12].clone());
                 panel.detail_open = true;
@@ -642,7 +632,7 @@ fn repeated_scroll_requests_are_coalesced_and_cancelled_on_close(cx: &mut TestAp
     let (_, panel) = cx.update(|cx| {
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
             cx.new(|cx| {
-                let mut panel = GitPanel::new(
+                let mut panel = GitPanel::new_idle(
                     ConfigStore {
                         path: directory.path().join("test-config.json"),
                     },
@@ -652,7 +642,6 @@ fn repeated_scroll_requests_are_coalesced_and_cancelled_on_close(cx: &mut TestAp
                     window,
                     cx,
                 );
-                panel.detect_task = None;
                 panel.git = Some(git);
                 panel.repository = Some(repo);
                 panel.filter_history(cx);

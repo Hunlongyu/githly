@@ -94,12 +94,10 @@ fn closing_detail_drops_document_state_and_pending_requests(cx: &mut TestAppCont
     let directory = tempfile::tempdir().unwrap();
     let (window, panel) = cx.update(|cx| {
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| cx.new(|cx| {
-            let mut panel = GitPanel::new(
+            let mut panel = GitPanel::new_idle(
                 ConfigStore { path: directory.path().join("config.json") },
                 Config::default(), Some("Test: do not save configuration".into()), None, window, cx,
             );
-            panel.detect_task = None;
-            panel.detecting = false;
             panel.detail_open = true;
             panel.selected_file = Some(0);
             panel.files = (0..360).map(|index| ChangedFile {
