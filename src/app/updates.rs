@@ -247,7 +247,12 @@ mod tests {
                         ConfigStore {
                             path: directory.path().join("config.json"),
                         },
-                        Config::default(),
+                        // This dialog works without Git. Keep real subprocess I/O off
+                        // GPUI's deterministic test scheduler.
+                        Config {
+                            git_path: Some(directory.path().join("missing-git")),
+                            ..Config::default()
+                        },
                         None,
                         None,
                         window,
