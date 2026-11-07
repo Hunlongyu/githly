@@ -4,7 +4,7 @@
 
 `.github/workflows/windows.yml` 使用 Windows 2025 Runner、仓库固定的 Rust 1.99.1 和 Cargo.lock。推送、PR、手动运行执行格式检查、测试、Clippy、Release 构建及打包；仅稳定 `vX.Y.Z` 标签会发布 GitHub Release，且必须与 Cargo.toml 版本完全一致。
 
-本地打包使用 PowerShell 7：
+本地打包使用 PowerShell 7.3 或更高版本。
 
 ```powershell
 cargo build --release --locked
@@ -16,7 +16,7 @@ cargo build --release --locked
 
 `dist/release` 包含：
 
-- `Githly-X.Y.Z-windows-x64.zip`
+- `Githly-X.Y.Z-windows-x64.zip` 解压后只有 `Githly.exe`。GPUI Component 的许可证保存在 ZIP 注释中。
 - `Githly-X.Y.Z-windows-x64-setup.exe`
 - `update-windows-x64-portable.json`：便携 ZIP 的版本、更新说明、字节数和 SHA-256。
 - `update.json`：版本、版本说明地址、安装包地址 / 字节数 / SHA-256。

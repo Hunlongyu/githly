@@ -83,18 +83,20 @@ jobs:
           $portable = Get-Item -LiteralPath "release/Githly-$version-windows-x64.zip"
           $platforms = [ordered]@{'macos-arm64' = 'macOS (Apple Silicon)'; 'macos-x64' = 'macOS (Intel)'; 'linux-x64' = 'Linux (amd64)'}
           $url = "https://github.com/$env:GH_REPO/releases/download/$env:RELEASE_TAG"
+          $icon = "https://raw.githubusercontent.com/$env:GH_REPO/$env:GITHUB_SHA/assets/release/download.svg"
           $table = @(
             '## 下载'
             ''
             '| 系统 | 下载 |'
             '| --- | --- |'
-            "| Windows 10/11 | [![Setup x64](https://img.shields.io/badge/Setup-x64-2d7d9a?style=flat-square)]($url/$($setup.Name))<br>[![Portable x64](https://img.shields.io/badge/Portable-x64-67b7d1?style=flat-square)]($url/$($portable.Name)) |"
+            "| Windows 10/11 x64 · 安装版 (Setup) | [![Download Windows x64 installer]($icon)]($url/$($setup.Name)) |"
+            "| Windows 10/11 x64 · 便携版 (ZIP) | [![Download Windows x64 portable ZIP]($icon)]($url/$($portable.Name)) |"
             foreach ($platform in $platforms.Keys) {
               $ext = if ($platform -eq 'linux-x64') { 'deb' } else { 'dmg' }
               $package = Get-Item -LiteralPath "release/Githly-$version-$platform.$ext"
               $manifest = Get-Content -LiteralPath "release/update-$platform.json" -Raw | ConvertFrom-Json
               if ($manifest.version -ne $version -or $manifest.installer.url -ne "$url/$($package.Name)" -or $manifest.installer.size -ne $package.Length -or $manifest.installer.sha256 -ne (Get-FileHash -LiteralPath $package.FullName).Hash) { throw "Invalid $platform manifest" }
-              "| $($platforms[$platform]) | [$($package.Name)]($url/$($package.Name)) |"
+              "| $($platforms[$platform]) | [![Download $($platforms[$platform]) $($ext.ToUpperInvariant())]($icon)]($url/$($package.Name)) |"
             }
           )
           ((@($body, '') + $table) -join "`n") | Set-Content -LiteralPath release-notes.md -Encoding utf8NoBOM

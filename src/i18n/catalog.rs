@@ -61,6 +61,7 @@ messages! {
     settings_shortcut => "设置  ⌘,", "Settings  ⌘,";
     switching_branch => "正在切换分支…", "Switching branches…";
     loading_project => "正在读取项目…", "Loading project…";
+    project_opened => "已打开项目", "Project opened";
     config_dir_missing => "无法定位配置目录", "Could not locate the configuration directory";
     invalid_config => "配置文件格式无效，原文件已保留", "Invalid settings file. The original file was preserved.";
     unsupported_config => "不支持此配置文件版本，原文件已保留", "Unsupported settings version. The original file was preserved.";

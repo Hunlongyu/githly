@@ -16,6 +16,9 @@ fn slow_project_open_uses_a_bottom_right_tip_without_moving_the_welcome_page(
         crate::theme::apply(ThemeMode::Dark, None, cx);
     });
     let directory = tempfile::tempdir().unwrap();
+    let (project, git) = fixture(1);
+    let repository = futures_lite::future::block_on(git.open(project.path(), 46)).unwrap();
+    let (loaded, read) = async_channel::bounded(1);
     let (window, panel) = cx.update(|cx| {
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
             cx.new(|cx| {
@@ -23,7 +26,10 @@ fn slow_project_open_uses_a_bottom_right_tip_without_moving_the_welcome_page(
                     ConfigStore {
                         path: directory.path().join("config.json"),
                     },
-                    Config::default(),
+                    Config {
+                        git_path: Some(directory.path().join("missing-git")),
+                        ..Config::default()
+                    },
                     None,
                     None,
                     window,
@@ -36,11 +42,8 @@ fn slow_project_open_uses_a_bottom_right_tip_without_moving_the_welcome_page(
     panel.update(cx, |panel, cx| {
         panel.detect_task = None;
         panel.detecting = false;
-        panel.git = Some(crate::git::Git {
-            executable: "git".into(),
-            version: "test".into(),
-        });
-        panel.begin_project_load(std::future::pending(), cx);
+        panel.git = Some(git);
+        panel.begin_project_load(async move { Ok(read.recv().await?) }, cx);
     });
     cx.run_until_parked();
     let before = cx
@@ -60,12 +63,36 @@ fn slow_project_open_uses_a_bottom_right_tip_without_moving_the_welcome_page(
         assert_eq!(window.find("load-project-zone").bounds(), before);
     })
     .unwrap();
+    loaded.try_send(repository).unwrap();
+    cx.run_until_parked();
+    panel.update(cx, |panel, _| {
+        assert!(panel.repository.is_some());
+        panel.refresh_task = None;
+    });
+    cx.executor().advance_clock(Duration::from_secs(4));
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        assert_eq!(window.notifications(cx).len(), 1);
+    })
+    .unwrap();
+    cx.executor().advance_clock(Duration::from_secs(2));
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        assert!(window.notifications(cx).is_empty())
+    })
+    .unwrap();
+    panel.update(cx, |panel, cx| {
+        panel.begin_project_load(std::future::pending(), cx)
+    });
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(260));
+    cx.run_until_parked();
     panel.update(cx, |panel, cx| panel.release_project(cx));
     cx.run_until_parked();
     cx.executor().advance_clock(Duration::from_secs(1));
     cx.run_until_parked();
     cx.update_window(window, |_, window, cx| {
-        assert!(window.notifications(cx).is_empty())
+        assert!(window.notifications(cx).is_empty());
     })
     .unwrap();
 }

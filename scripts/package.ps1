@@ -1,3 +1,4 @@
+#requires -Version 7.3
 param(
     [string]$Tag = '',
     [string]$Executable = '',
@@ -15,13 +16,17 @@ try {
     if (-not $Executable) { $Executable = Join-Path $projectRoot 'target\release\githly.exe' }
     $Executable = (Resolve-Path -LiteralPath $Executable).Path
     $output = Join-Path $projectRoot 'dist\release'
-    $stage = Join-Path $projectRoot "target\package-$version"
-    New-Item -ItemType Directory -Path $output, $stage -Force | Out-Null
-    Copy-Item -LiteralPath $Executable -Destination (Join-Path $stage 'Githly.exe') -Force
-    Copy-Item -LiteralPath 'README.md', 'README.zh-CN.md' -Destination $stage -Force
-    Copy-Item -LiteralPath 'vendor\gpui-component\LICENSE-APACHE' -Destination (Join-Path $stage 'GPUI-Component-LICENSE.txt') -Force
+    New-Item -ItemType Directory -Path $output -Force | Out-Null
     $zipName = "Githly-$version-windows-x64.zip"
-    Compress-Archive -LiteralPath (Join-Path $stage 'Githly.exe'), (Join-Path $stage 'README.md'), (Join-Path $stage 'README.zh-CN.md'), (Join-Path $stage 'GPUI-Component-LICENSE.txt') -DestinationPath (Join-Path $output $zipName) -Force
+    $tempZip = Join-Path $output ([IO.Path]::GetRandomFileName())
+    try {
+        $archive = [IO.Compression.ZipFile]::Open($tempZip, 'Create')
+        try {
+            $archive.Comment = Get-Content -LiteralPath 'vendor\gpui-component\LICENSE-APACHE' -Raw -Encoding utf8
+            [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $Executable, 'Githly.exe') | Out-Null
+        } finally { $archive.Dispose() }
+        [IO.File]::Move($tempZip, (Join-Path $output $zipName), $true)
+    } finally { [IO.File]::Delete($tempZip) }
     $files = @((Join-Path $output $zipName))
     $sections = (Get-Content -LiteralPath 'CHANGELOG.md' -Encoding utf8 -Raw) -split '(?m)^## '
     $section = $sections | Where-Object { $_.StartsWith("v$version · ") } | Select-Object -First 1

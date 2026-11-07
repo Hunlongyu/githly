@@ -396,10 +396,12 @@ impl GitPanel {
         let executor = cx.background_executor().clone();
         let task = cx.background_spawn(read);
         self.load_task = Some(cx.spawn(async move |this, cx| {
+            let mut showed_loading_tip = false;
             let result = futures_lite::future::or(task, async {
                 executor.timer(std::time::Duration::from_millis(250)).await;
                 this.update(cx, |panel, cx| {
                     if panel.project_generation == project_generation {
+                        showed_loading_tip = true;
                         panel.tip(
                             "project",
                             Some(Notification::info(messages().loading_project()).autohide(false)),
@@ -416,7 +418,13 @@ impl GitPanel {
                 }
                 match result {
                     Ok(repository) => {
-                        this.tip("project", None, cx);
+                        if showed_loading_tip {
+                            this.tip(
+                                "project",
+                                Some(Notification::success(messages().project_opened())),
+                                cx,
+                            );
+                        }
                         this.config.remember_project(&repository.root);
                         this.branch_picker.update(cx, |picker, cx| {
                             picker.set_branches(repository.branches.clone(), cx);
