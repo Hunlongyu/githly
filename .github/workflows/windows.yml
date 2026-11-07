@@ -79,24 +79,35 @@ jobs:
           if ($notes.Count -ne 1) { throw "Expected one changelog entry for $env:RELEASE_TAG." }
           $body = ($notes[0] -split '\n', 2)[1].Trim()
           $version = $env:RELEASE_TAG.Substring(1)
-          $setup = Get-Item -LiteralPath "release/Githly-$version-windows-x64-setup.exe"
-          $portable = Get-Item -LiteralPath "release/Githly-$version-windows-x64.zip"
-          $platforms = [ordered]@{'macos-arm64' = 'macOS (Apple Silicon)'; 'macos-x64' = 'macOS (Intel)'; 'linux-x64' = 'Linux (amd64)'}
+          $downloads = [ordered]@{
+            'Windows 10/11' = @(
+              @{ file = 'windows-x64-setup.exe'; manifest = 'update.json'; alt = 'Setup x64'; badge = 'Setup-x64-2d7d9a?style=plastic' }
+              @{ file = 'windows-x64.zip'; manifest = 'update-windows-x64-portable.json'; alt = 'Portable x64'; badge = 'Portable-x64-67b7d1?style=plastic' }
+            )
+            'macOS' = @(
+              @{ file = 'macos-arm64.dmg'; manifest = 'update-macos-arm64.json'; alt = 'DMG Apple Silicon'; badge = 'DMG-Apple_Silicon-000000?style=plastic&logo=apple&logoColor=white' }
+              @{ file = 'macos-x64.dmg'; manifest = 'update-macos-x64.json'; alt = 'DMG Intel X64'; badge = 'DMG-Intel_X64-009ec4?style=plastic&logo=apple&logoColor=white' }
+            )
+            'Linux' = @(
+              @{ file = 'linux-x64.deb'; manifest = 'update-linux-x64.json'; alt = 'DebPackage x64'; badge = 'DebPackage-x64-f29762?style=plastic&logo=debian&logoColor=white' }
+            )
+          }
           $url = "https://github.com/$env:GH_REPO/releases/download/$env:RELEASE_TAG"
-          $icon = "https://raw.githubusercontent.com/$env:GH_REPO/$env:GITHUB_SHA/assets/release/download.svg"
+          $badges = 'https://img.shields.io/badge'
           $table = @(
             '## 下载'
             ''
             '| 系统 | 下载 |'
             '| --- | --- |'
-            "| Windows 10/11 x64 · 安装版 (Setup) | [![Download Windows x64 installer]($icon)]($url/$($setup.Name)) |"
-            "| Windows 10/11 x64 · 便携版 (ZIP) | [![Download Windows x64 portable ZIP]($icon)]($url/$($portable.Name)) |"
-            foreach ($platform in $platforms.Keys) {
-              $ext = if ($platform -eq 'linux-x64') { 'deb' } else { 'dmg' }
-              $package = Get-Item -LiteralPath "release/Githly-$version-$platform.$ext"
-              $manifest = Get-Content -LiteralPath "release/update-$platform.json" -Raw | ConvertFrom-Json
-              if ($manifest.version -ne $version -or $manifest.installer.url -ne "$url/$($package.Name)" -or $manifest.installer.size -ne $package.Length -or $manifest.installer.sha256 -ne (Get-FileHash -LiteralPath $package.FullName).Hash) { throw "Invalid $platform manifest" }
-              "| $($platforms[$platform]) | [![Download $($platforms[$platform]) $($ext.ToUpperInvariant())]($icon)]($url/$($package.Name)) |"
+            foreach ($os in $downloads.Keys) {
+              $buttons = foreach ($item in $downloads[$os]) {
+                $package = Get-Item -LiteralPath "release/Githly-$version-$($item.file)"
+                $manifest = Get-Content -LiteralPath "release/$($item.manifest)" -Raw -Encoding utf8 | ConvertFrom-Json
+                $assetUrl = "$url/$($package.Name)"
+                if ($manifest.version -ne $version -or $manifest.installer.url -ne $assetUrl -or $manifest.installer.size -ne $package.Length -or $manifest.installer.sha256 -ne (Get-FileHash -LiteralPath $package.FullName).Hash) { throw "Invalid $($item.manifest)" }
+                "[![$($item.alt)]($badges/$($item.badge))]($assetUrl)"
+              }
+              "| $os | $($buttons -join '<br>') |"
             }
           )
           ((@($body, '') + $table) -join "`n") | Set-Content -LiteralPath release-notes.md -Encoding utf8NoBOM
