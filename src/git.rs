@@ -46,6 +46,7 @@ pub struct Commit {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Repository {
     pub root: PathBuf,
+    pub has_other_worktrees: bool,
     git_dir: PathBuf,
     pub operation_states: Vec<String>,
     pub branch: String,
@@ -216,13 +217,13 @@ impl Git {
         Ok(stdout)
     }
 
-    pub async fn open(&self, path: &Path) -> Result<Repository> {
+    pub async fn open(&self, path: &Path, initial_limit: usize) -> Result<Repository> {
         let root = self
             .run(Some(path), ["rev-parse", "--show-toplevel"])
             .await
             .context("此目录不是可读取的 Git 工作目录")?;
         let root = PathBuf::from(String::from_utf8_lossy(&root).trim());
-        self.read_repository(root, None, true).await
+        self.read_repository(root, None, true, initial_limit).await
     }
 
     /// Called by the single background polling task. Unchanged history shares
@@ -231,23 +232,34 @@ impl Git {
         &self,
         previous: &Repository,
         update_history: bool,
+        initial_limit: usize,
     ) -> Result<Option<Repository>> {
         let next = self
-            .read_repository(previous.root.clone(), Some(previous), update_history)
+            .read_repository(
+                previous.root.clone(),
+                Some(previous),
+                update_history,
+                initial_limit,
+            )
             .await?;
         Ok((next != *previous).then_some(next))
     }
 
-    pub async fn browse(&self, previous: &Repository, scope: HistoryScope) -> Result<Repository> {
+    pub async fn browse(
+        &self,
+        previous: &Repository,
+        scope: HistoryScope,
+        initial_limit: usize,
+    ) -> Result<Repository> {
         let mut previous = previous.clone();
         previous.history_scope = scope;
         previous.history_key.clear();
-        self.read_repository(previous.root.clone(), Some(&previous), true)
+        self.read_repository(previous.root.clone(), Some(&previous), true, initial_limit)
             .await
     }
 
     pub async fn switch_branch(&self, root: &Path, name: &str) -> Result<()> {
-        let current = self.open(root).await?;
+        let current = self.open(root, 1).await?;
         anyhow::ensure!(
             current.changes.is_empty(),
             "工作区或暂存区存在更改，暂不能切换分支"
@@ -300,6 +312,7 @@ impl Git {
         root: PathBuf,
         previous: Option<&Repository>,
         update_history: bool,
+        initial_limit: usize,
     ) -> Result<Repository> {
         let git_dir = if let Some(previous) = previous {
             previous.git_dir.clone()
@@ -398,14 +411,13 @@ impl Git {
         if history_pending {
             history_key = previous.unwrap().history_key.clone();
         }
+        let initial_limit = initial_limit.max(1);
         let mut graph_lanes = Vec::new();
         let commits = if let Some(previous) = unchanged_history {
             previous.commits.clone()
         } else if !roots.is_empty() {
             let mut args: Vec<String> = [
                 "log",
-                "-n",
-                "200",
                 "-z",
                 "--date=format-local:%Y-%m-%d %H:%M",
                 "--format=%H%x00%h%x00%an%x00%ad%x00%s%x00%P%x00%D",
@@ -414,6 +426,7 @@ impl Git {
             .into_iter()
             .map(String::from)
             .collect();
+            args.push(format!("--max-count={initial_limit}"));
             args.extend(roots.clone());
             args.push("--".into());
             let log = self.run(Some(&root), args).await?;
@@ -444,7 +457,7 @@ impl Git {
             });
         let history_complete = unchanged_history
             .map(|repo| repo.history_complete)
-            .unwrap_or(commits.len() < history::HISTORY_BATCH);
+            .unwrap_or(commits.len() < initial_limit);
         let graph_lanes = unchanged_history
             .map(|repo| repo.graph_lanes.clone())
             .unwrap_or_else(|| graph_lanes.into());
@@ -472,8 +485,16 @@ impl Git {
         if conflicts > 0 {
             operation_states.push(format!("{conflicts} 个冲突文件"));
         }
+        let has_other_worktrees = self.worktree_entries(&root).await.is_ok_and(|entries| {
+            entries
+                .iter()
+                .filter(|entry| entry.available)
+                .nth(1)
+                .is_some()
+        });
         Ok(Repository {
             root,
+            has_other_worktrees,
             head: (head != b"(initial)").then(|| String::from_utf8_lossy(head).into_owned()),
             git_dir,
             operation_states,
@@ -934,7 +955,7 @@ mod tests {
             );
             git.run(Some(root), ["add", "--", "."]).await.unwrap();
             git.run(Some(root), commit).await.unwrap();
-            let initial = git.open(root).await.unwrap().commits[0].clone();
+            let initial = git.open(root, 46).await.unwrap().commits[0].clone();
             assert!(initial.parents.is_empty());
             assert!(
                 git.image_file(root, Some(&initial.id), "missing.png")
@@ -980,7 +1001,7 @@ mod tests {
             git.run(Some(root), ["mv", "--", "旧 图片.png", "新 图片.png"])
                 .await
                 .unwrap();
-            let repository = git.open(root).await.unwrap();
+            let repository = git.open(root, 46).await.unwrap();
             let renamed = &repository.changes[0];
             assert_eq!(renamed.path, "新 图片.png");
             assert_eq!(renamed.original_path.as_deref(), Some("旧 图片.png"));
@@ -1087,7 +1108,7 @@ mod tests {
                 "-m",
                 "初次提交 | test",
             ]);
-            let repo = git.open(root).await.unwrap();
+            let repo = git.open(root, 46).await.unwrap();
             assert_eq!(repo.branch, "main");
             assert!(repo.tracking.is_none());
             assert_eq!(repo.commits.len(), 1);
@@ -1109,7 +1130,7 @@ mod tests {
                 1
             );
             std::fs::write(root.join("b.txt"), "changed second file\n").unwrap();
-            let repo = git.open(root).await.unwrap();
+            let repo = git.open(root, 46).await.unwrap();
             assert_eq!(repo.changes.len(), 1);
             let patch = git.diff(root, None, &repo.changes[0]).await.unwrap();
             assert!(patch.contains("+changed second file"));
@@ -1117,7 +1138,7 @@ mod tests {
             command(&["branch", "upstream"]);
             command(&["branch", "--set-upstream-to=upstream", "main"]);
             assert_eq!(
-                git.open(root).await.unwrap().tracking.unwrap().counts,
+                git.open(root, 46).await.unwrap().tracking.unwrap().counts,
                 Some((0, 0))
             );
             command(&[
@@ -1129,7 +1150,7 @@ mod tests {
                 "local only",
             ]);
             assert_eq!(
-                git.open(root).await.unwrap().tracking.unwrap().counts,
+                git.open(root, 46).await.unwrap().tracking.unwrap().counts,
                 Some((1, 0))
             );
             command(&["switch", "upstream"]);
@@ -1143,7 +1164,7 @@ mod tests {
             ]);
             command(&["switch", "main"]);
             assert_eq!(
-                git.open(root).await.unwrap().tracking.unwrap().counts,
+                git.open(root, 46).await.unwrap().tracking.unwrap().counts,
                 Some((1, 1))
             );
         });

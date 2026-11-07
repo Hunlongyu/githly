@@ -30,7 +30,6 @@ pub struct Config {
     pub schema_version: u32,
     pub git_path: Option<PathBuf>,
     pub recent_projects: Vec<PathBuf>,
-    pub active_project: Option<PathBuf>,
     pub appearance: Appearance,
     pub motion: MotionPreference,
     pub history_display: HistoryDisplay,
@@ -67,7 +66,6 @@ impl Default for Config {
             schema_version: 1,
             git_path: None,
             recent_projects: Vec::new(),
-            active_project: None,
             appearance: Appearance::System,
             motion: MotionPreference::default(),
             history_display: HistoryDisplay::default(),
@@ -80,7 +78,6 @@ impl Default for Config {
 
 impl Config {
     pub fn remember_project(&mut self, path: &Path) {
-        self.active_project = Some(path.to_path_buf());
         self.recent_projects.retain(|item| item != path);
         self.recent_projects.insert(0, path.to_path_buf());
         self.recent_projects.truncate(12);
@@ -110,13 +107,8 @@ impl ConfigStore {
                 return Err(error).with_context(|| format!("无法读取 {}", self.path.display()));
             }
         };
-        let value: serde_json::Value =
+        let config: Config =
             serde_json::from_slice(&bytes).context("配置文件格式无效，原文件已保留")?;
-        let mut config: Config =
-            serde_json::from_value(value.clone()).context("配置文件格式无效，原文件已保留")?;
-        if value.get("active_project").is_none() {
-            config.active_project = config.recent_projects.first().cloned();
-        }
         anyhow::ensure!(
             config.schema_version == 1,
             "不支持此配置文件版本，原文件已保留"
@@ -154,7 +146,7 @@ mod tests {
         let restored = store.load().unwrap();
         assert_eq!(restored.git_path, config.git_path);
         assert_eq!(restored.recent_projects.len(), 1);
-        assert_eq!(restored.active_project, Some(PathBuf::from("E:/项目")));
+        assert_eq!(restored.recent_projects, [PathBuf::from("E:/项目")]);
         assert_eq!(restored.appearance, Appearance::Dark);
         assert_eq!(restored.motion, MotionPreference::Off);
     }
@@ -183,28 +175,31 @@ mod tests {
     }
 
     #[test]
-    fn migrates_last_project_but_respects_explicit_close() {
+    fn legacy_active_project_is_ignored_and_recents_are_preserved() {
         let dir = tempfile::tempdir().unwrap();
         let store = ConfigStore {
             path: dir.path().join("config.json"),
         };
         fs::write(
             &store.path,
-            br#"{"recent_projects":["E:/codes/bookmarks-manager"]}"#,
+            br#"{"recent_projects":["E:/codes/bookmarks-manager"],"active_project":"E:/codes/bookmarks-manager"}"#,
         )
         .unwrap();
         let mut config = store.load().unwrap();
         assert_eq!(config.motion, MotionPreference::Subtle);
-        assert_eq!(
-            config.active_project,
-            Some(PathBuf::from("E:/codes/bookmarks-manager"))
-        );
-        config.active_project = None;
         config.history_display.hash = true;
         store.save(&config).unwrap();
         let restored = store.load().unwrap();
-        assert_eq!(restored.active_project, None);
-        assert_eq!(restored.recent_projects.len(), 1);
+        assert_eq!(
+            restored.recent_projects,
+            [PathBuf::from("E:/codes/bookmarks-manager")]
+        );
+        assert!(
+            serde_json::to_value(&restored)
+                .unwrap()
+                .get("active_project")
+                .is_none()
+        );
         assert!(restored.history_display.hash);
     }
 }

@@ -1,111 +1,70 @@
 use super::*;
+use gpui_kit::component::tooltip::Tooltip;
 
-struct WorktreeView {
-    panel: WeakEntity<GitPanel>,
-    entries: Vec<crate::git::Worktree>,
-    message: Option<String>,
-    task: Option<Task<()>>,
-}
-
-impl Render for WorktreeView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        v_flex()
-            .w_full()
-            .max_h(px(420.))
-            .gap_2()
-            .when_some(self.message.clone(), |view, message| {
-                view.child(div().text_sm().child(message))
-            })
-            .when(!self.entries.is_empty(), |view| {
-                view.child(
-                    uniform_list(
-                        "worktree-list",
-                        self.entries.len(),
-                        cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
-                            range
-                                .map(|index| {
-                                    let entry = &this.entries[index];
-                                    let path = entry.path.clone();
-                                    let parent = this.panel.clone();
-                                    let bare = entry.bare;
-                                    v_flex()
-                                        .id(("worktree", index))
-                                        .h(px(76.))
-                                        .p_2()
-                                        .gap_1()
-                                        .rounded_md()
-                                        .hover(|view| view.bg(cx.theme().list_hover))
-                                        .child(
-                                            div()
-                                                .text_sm()
-                                                .truncate()
-                                                .child(entry.path.display().to_string()),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(cx.theme().muted_foreground)
-                                                .truncate()
-                                                .child(format!(
-                                                    "{} · {}",
-                                                    entry.branch, entry.status
-                                                )),
-                                        )
-                                        .on_click(move |_, window, cx| {
-                                            if bare {
-                                                return;
-                                            }
-                                            window.close_dialog(cx);
-                                            let _ = parent.update(cx, |panel, cx| {
-                                                panel.load_project(path.clone(), cx)
-                                            });
-                                        })
-                                })
-                                .collect::<Vec<_>>()
-                        }),
-                    )
-                    .h(px((self.entries.len() as f32 * 76.).min(380.)))
-                    .w_full(),
-                )
-            })
-    }
-}
-
-impl GitPanel {
-    pub(super) fn open_worktrees(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(repo) = &self.repository else { return };
-        let root = repo.root.clone();
-        let Some(git) = self.git.clone() else { return };
-        let parent = cx.entity().downgrade();
-        let content = cx.new(|cx| {
-            let task = cx.background_spawn(async move { git.worktrees(&root).await });
-            let task = cx.spawn(async move |this, cx| {
-                let result = task.await;
-                let _ = this.update(cx, |this: &mut WorktreeView, cx| {
-                    match result {
+pub(super) fn dropdown(git: Git, root: PathBuf, panel: WeakEntity<GitPanel>) -> impl IntoElement {
+    controls::button("worktrees")
+        .ghost()
+        .label("worktree")
+        .dropdown_caret(true)
+        .dropdown_menu(move |menu, window, cx| {
+            let git = git.clone();
+            let root = root.clone();
+            let panel = panel.clone();
+            let query_root = root.clone();
+            let query = cx.background_spawn(async move { git.worktrees(&query_root).await });
+            let task = cx.spawn_in(window, async move |menu, cx| {
+                let result = query.await;
+                let _ = menu.update_in(cx, |menu, window, cx| {
+                    menu.rebuild(window, cx, |mut menu, _, _| match result {
+                        Ok(entries) if entries.is_empty() => menu.label("没有可用的 worktree"),
                         Ok(entries) => {
-                            this.entries = entries;
-                            this.message = None;
+                            for entry in entries {
+                                menu = menu.item(worktree_item(entry, &root, panel.clone()));
+                            }
+                            menu
                         }
-                        Err(error) => this.message = Some(format!("{error:#}")),
-                    }
-                    this.task = None;
-                    cx.notify();
+                        Err(error) => menu.label(format!("读取 worktree 失败：{error:#}")),
+                    });
                 });
             });
-            WorktreeView {
-                panel: parent,
-                entries: Vec::new(),
-                message: Some("正在读取工作目录…".into()),
-                task: Some(task),
-            }
-        });
-        window.open_dialog(cx, move |dialog, _, _| {
-            dialog
-                .title("已有工作目录")
-                .w(px(640.))
-                .centered()
-                .child(content.clone())
-        });
-    }
+            cx.on_release(move |_, _| drop(task)).detach();
+            menu.min_w(px(400.))
+                .max_w(px(520.))
+                .scrollable(true)
+                .label("正在读取 worktree…")
+        })
+}
+
+fn worktree_item(
+    entry: crate::git::Worktree,
+    root: &std::path::Path,
+    panel: WeakEntity<GitPanel>,
+) -> PopupMenuItem {
+    let current = entry.path == root;
+    let path = entry.path.display().to_string();
+    let description = format!("{} · {}", entry.branch, entry.status);
+    PopupMenuItem::element(move |_, cx| {
+        let full_path = path.clone();
+        v_flex()
+            .id(SharedString::from(path.clone()))
+            .flex_1()
+            .min_w_0()
+            .py_1()
+            .child(div().text_sm().truncate().child(path.clone()))
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .truncate()
+                    .child(description.clone()),
+            )
+            .tooltip(move |window, cx| Tooltip::new(full_path.clone()).build(window, cx))
+    })
+    .checked(current)
+    .disabled(!entry.available)
+    .on_click(move |_, _, cx| {
+        if !current {
+            let _ = panel.update(cx, |panel, cx| panel.load_project(entry.path.clone(), cx));
+        }
+    })
 }

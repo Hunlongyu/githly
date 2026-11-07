@@ -5,6 +5,8 @@ mod config;
 mod git;
 mod graph;
 mod motion;
+#[cfg(windows)]
+mod single_instance;
 mod theme;
 mod update;
 
@@ -32,6 +34,12 @@ fn main() -> anyhow::Result<()> {
         tracing::error!("{panic}");
     }));
     let initial_project = std::env::args_os().nth(1).map(std::path::PathBuf::from);
+    #[cfg(windows)]
+    let Some(_instance_guard) = single_instance::claim_or_forward(initial_project.as_deref())
+        .inspect_err(|error| tracing::error!("{error:#}"))?
+    else {
+        return Ok(());
+    };
     let store = ConfigStore::for_app()?;
     let (config, error) = match store.load() {
         Ok(config) => (config, None),
@@ -65,7 +73,13 @@ fn main() -> anyhow::Result<()> {
             },
             cx,
             move |window, cx| {
-                cx.new(|cx| app::GitPanel::new(store, config, error, initial_project, window, cx))
+                let panel = cx.new(|cx| {
+                    app::GitPanel::new(store, config, error, initial_project, window, cx)
+                });
+                #[cfg(windows)]
+                single_instance::listen(window, panel.downgrade(), cx)
+                    .expect("无法注册 Githly 启动请求");
+                panel
             },
         )
         .expect("无法创建 Githly 窗口");

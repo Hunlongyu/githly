@@ -15,7 +15,8 @@ impl GitPanel {
         self.statistics_pending = false;
         let generation = self.project_generation;
         self.error = None;
-        let task = cx.background_spawn(async move { git.browse(&previous, scope).await });
+        let limit = self.initial_history_limit;
+        let task = cx.background_spawn(async move { git.browse(&previous, scope, limit).await });
         self.load_task = Some(cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
@@ -26,13 +27,9 @@ impl GitPanel {
                     Ok(repo) => {
                         this.close_detail(cx);
                         this.history_scroll = UniformListScrollHandle::new();
-                        let has_commits = !repo.commits.is_empty();
                         let retired = this.repository.replace(Arc::new(repo));
                         cx.background_spawn(async move { drop(retired) }).detach();
                         this.filter_history(cx);
-                        if has_commits {
-                            this.select_commit(0, cx);
-                        }
                     }
                     Err(error) => this.error = Some(format!("{error:#}")),
                 }

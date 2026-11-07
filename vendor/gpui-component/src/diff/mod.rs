@@ -509,7 +509,7 @@ fn render_diff(
     state.set_window(window.window_handle().window_id());
     state.ensure_presentation(cx);
     let rem = window.rem_size();
-    let font_size = rem * (f32::from(cx.theme().mono_font_size) / 16.);
+    let font_size = rem * (f32::from(cx.theme().mono_font_size) / 16.) + px(1.);
     let font_family = cx.theme().mono_font_family.clone();
     let row_height = font_size * 1.6;
     let digits = state

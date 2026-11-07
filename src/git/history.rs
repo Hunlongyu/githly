@@ -6,7 +6,7 @@ use std::{
     task::{Poll, ready},
 };
 
-pub const HISTORY_BATCH: usize = 200;
+pub const HISTORY_BATCH: usize = 100;
 
 /// Shared batches: extending history copies a small index, not all old strings
 /// and graph edges. The entire session is released when its project is closed.
@@ -31,15 +31,21 @@ impl<T> History<T> {
         self.len == 0
     }
     pub fn get(&self, index: usize) -> Option<&T> {
+        let first = &self.batches[0];
+        if index < first.len() {
+            return first.get(index);
+        }
+        // Only continuation batches have a fixed size.
+        let index = index - first.len();
         self.batches
-            .get(index / HISTORY_BATCH)?
+            .get(1 + index / HISTORY_BATCH)?
             .get(index % HISTORY_BATCH)
     }
     pub fn iter(&self) -> impl Iterator<Item = &T> {
         self.batches.iter().flat_map(|b| b.iter())
     }
     fn append(&mut self, items: Vec<T>) {
-        debug_assert_eq!(self.len % HISTORY_BATCH, 0);
+        debug_assert_eq!((self.len - self.batches[0].len()) % HISTORY_BATCH, 0);
         self.len += items.len();
         self.batches.push(items.into());
     }

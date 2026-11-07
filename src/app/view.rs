@@ -1,5 +1,5 @@
 use super::controls;
-use super::file_list::{ChangeRow, scoped_change_rows};
+use super::file_list::grouped_file_indices;
 use super::*;
 use gpui_kit::component::{
     Icon,
@@ -8,6 +8,60 @@ use gpui_kit::component::{
     tab::Tab,
     tooltip::Tooltip,
 };
+
+pub(super) const FILE_ROW_HEIGHT: f32 = 28.;
+
+pub(super) const HISTORY_ROW_HEIGHT: f32 = 32.;
+const HISTORY_HEADER_HEIGHT: f32 = 28.;
+
+pub(super) fn initial_history_limit(window: &Window) -> usize {
+    // Project and branch loads start with the detail pane closed.
+    let list_height = f32::from(window.viewport_size().height)
+        - title_bar::TITLE_BAR_HEIGHT
+        - controls::TOOLBAR_HEIGHT
+        - HISTORY_HEADER_HEIGHT;
+    2 * (list_height / HISTORY_ROW_HEIGHT).ceil().max(1.) as usize
+}
+
+struct UntrackedHeader {
+    panel: Entity<GitPanel>,
+    row: usize,
+    count: usize,
+}
+
+impl UniformListDecoration for UntrackedHeader {
+    fn compute(
+        &self,
+        _: std::ops::Range<usize>,
+        bounds: Bounds<Pixels>,
+        offset: Point<Pixels>,
+        row_height: Pixels,
+        _: usize,
+        _: &mut Window,
+        cx: &mut App,
+    ) -> AnyElement {
+        // Decorations are positioned in content coordinates. Keep the header
+        // on its own row until that row crosses either edge of the viewport.
+        let viewport_top = -offset.y;
+        let last_top = viewport_top + (bounds.size.height - row_height).max(px(0.));
+        let top = (row_height * self.row).clamp(viewport_top, last_top);
+        let header = self.panel.update(cx, |panel, cx| {
+            panel.file_group_header(true, self.count, cx)
+        });
+        div()
+            .size_full()
+            .child(
+                div()
+                    .absolute()
+                    .top(top)
+                    .left_0()
+                    .right_0()
+                    .block_mouse_except_scroll()
+                    .child(header),
+            )
+            .into_any_element()
+    }
+}
 
 impl GitPanel {
     pub(super) fn filter_history(&mut self, cx: &mut Context<Self>) {
@@ -221,7 +275,7 @@ impl GitPanel {
                 index,
             ))
             .w_full()
-            .h(px(28.))
+            .h(px(FILE_ROW_HEIGHT))
             .flex_shrink_0()
             .line_height(px(18.))
             .px(px(12.))
@@ -404,16 +458,16 @@ impl GitPanel {
             .flex()
             .items_center()
             .w_full()
-            .h(px(28.))
+            .h(px(FILE_ROW_HEIGHT))
             .flex_shrink_0()
             .px(px(12.))
             .gap(px(8.))
             .line_height(px(18.))
-            .bg(cx.theme().sidebar)
+            .bg(cx.theme().muted)
             .border_b_1()
             .border_color(cx.theme().border)
             .text_color(cx.theme().foreground)
-            .hover(|style| style.bg(cx.theme().list_hover))
+            .hover(|style| style.bg(cx.theme().sidebar_accent))
             .focus_visible(|style| style.border_color(cx.theme().ring))
             .child(
                 Icon::new(if collapsed {
@@ -421,7 +475,8 @@ impl GitPanel {
                 } else {
                     IconName::ChevronDown
                 })
-                .size_3(),
+                .size_4()
+                .text_color(cx.theme().sidebar_primary),
             )
             .child(
                 div()
@@ -434,11 +489,14 @@ impl GitPanel {
             )
             .child(
                 div()
+                    .min_w(px(22.))
                     .px_1p5()
-                    .rounded_sm()
-                    .bg(cx.theme().muted)
+                    .text_center()
+                    .rounded_full()
+                    .bg(cx.theme().sidebar_accent)
                     .text_size(px(12.))
-                    .text_color(cx.theme().muted_foreground)
+                    .font_semibold()
+                    .text_color(cx.theme().sidebar_accent_foreground)
                     .child(count.to_string()),
             )
             .on_click(cx.listener(move |this, _, _, cx| {
@@ -448,38 +506,62 @@ impl GitPanel {
             .into_any_element()
     }
 
-    pub(super) fn workspace(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let repo = self.repository.as_ref().unwrap();
-        let file_query = self.file_search.read(cx).value();
-        let file_rows = scoped_change_rows(
-            &repo.changes,
-            &file_query,
-            self.collapsed_change_groups,
-            self.change_scope,
-        );
-        let file_groups = uniform_list(
+    fn working_file_groups(&self, files: &[ChangedFile], cx: &mut Context<Self>) -> Div {
+        let [mut tracked, mut untracked] =
+            grouped_file_indices(files, &self.file_search.read(cx).value(), self.change_scope);
+        let tracked_count = tracked.len();
+        let untracked_count = untracked.len();
+        if self.collapsed_change_groups[0] {
+            tracked.clear();
+        }
+        let header_row = tracked.len();
+        if !self.collapsed_change_groups[1] {
+            tracked.append(&mut untracked);
+        }
+        let indices = tracked;
+        let list = uniform_list(
             "working-files",
-            file_rows.len(),
+            indices.len() + 1,
             cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
+                let files = &this.repository.as_ref().unwrap().changes;
                 range
-                    .map(|position| match file_rows[position] {
-                        ChangeRow::Header { untracked, count } => {
-                            this.file_group_header(untracked, count, cx)
+                    .map(|row| {
+                        if row == header_row {
+                            return div().h(px(FILE_ROW_HEIGHT)).into_any_element();
                         }
-                        ChangeRow::File(index) => this.file_row(
-                            &this.repository.as_ref().unwrap().changes[index],
-                            index,
-                            true,
-                            cx,
-                        ),
+                        let index = indices[row - usize::from(row > header_row)];
+                        this.file_row(&files[index], index, true, cx)
                     })
                     .collect::<Vec<_>>()
             }),
         )
+        .size_full()
         .track_scroll(&self.changes_scroll)
-        .flex_1()
-        .w_full()
-        .min_h_0();
+        .with_decoration(UntrackedHeader {
+            panel: cx.entity().clone(),
+            row: header_row,
+            count: untracked_count,
+        });
+        v_flex()
+            .flex_1()
+            .min_h_0()
+            .w_full()
+            .overflow_hidden()
+            .child(self.file_group_header(false, tracked_count, cx))
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .overflow_hidden()
+                    .child(list)
+                    .child(Scrollbar::vertical(&self.changes_scroll).viewport_from_layout()),
+            )
+    }
+
+    pub(super) fn workspace(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let repo = self.repository.as_ref().unwrap();
         let left = v_flex()
             .track_focus(&self.changes_focus)
             .size_full()
@@ -528,6 +610,23 @@ impl GitPanel {
                     ),
             )
             .when(!self.stash_tab, |view| {
+                let stats = &self.statistics;
+                let summary = if repo.changes.is_empty() {
+                    None
+                } else if self.statistics_pending {
+                    Some("正在计算增删行数…".to_string())
+                } else if self.statistics_error.is_some() {
+                    Some("统计暂不可用，稍后自动重试".into())
+                } else if stats.added == 0 && stats.removed == 0 {
+                    stats.incomplete.then(|| "部分文件无文本统计".into())
+                } else {
+                    let note = if stats.incomplete {
+                        " · 部分文件无文本统计"
+                    } else {
+                        ""
+                    };
+                    Some(format!("+{} −{}{note}", stats.added, stats.removed))
+                };
                 view.child(
                     div().px_2().pt_1().child(
                         controls::segmented("change-scope")
@@ -556,29 +655,16 @@ impl GitPanel {
                         .py(px(6.))
                         .child(controls::search_input(&self.file_search)),
                 )
-                .child(
-                    div()
-                        .px_3()
-                        .pb_1()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(if self.statistics_pending {
-                            "正在计算增删行数…".to_string()
-                        } else if self.statistics_error.is_some() {
-                            "统计暂不可用，稍后自动重试".into()
-                        } else {
-                            format!(
-                                "+{} −{}{}",
-                                self.statistics.added,
-                                self.statistics.removed,
-                                if self.statistics.incomplete {
-                                    " · 部分文件无文本统计"
-                                } else {
-                                    ""
-                                }
-                            )
-                        }),
-                )
+                .when_some(summary, |view, summary| {
+                    view.child(
+                        div()
+                            .px_3()
+                            .pb_1()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(summary),
+                    )
+                })
             })
             .child(if self.stash_tab {
                 v_flex()
@@ -637,20 +723,7 @@ impl GitPanel {
                     })
                     .into_any_element()
             } else {
-                v_flex()
-                    .flex_1()
-                    .min_h_0()
-                    .w_full()
-                    .when(repo.changes.is_empty(), |view| {
-                        view.child(
-                            div()
-                                .p_4()
-                                .text_sm()
-                                .text_color(cx.theme().muted_foreground)
-                                .child("工作区干净"),
-                        )
-                    })
-                    .child(file_groups)
+                self.working_file_groups(&repo.changes, cx)
                     .into_any_element()
             });
         let graph = self.config.history_display.graph;
@@ -761,7 +834,7 @@ impl GitPanel {
             )
             .child(
                 h_flex()
-                    .h(px(28.))
+                    .h(px(HISTORY_HEADER_HEIGHT))
                     .flex_shrink_0()
                     .px(px(12.))
                     .text_size(px(11.))
@@ -778,8 +851,8 @@ impl GitPanel {
                     "history",
                     self.history_indices.len(),
                     cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
-                        this.history_near_end =
-                            range.end.saturating_add(40) >= this.history_indices.len();
+                        this.history_near_end = range.end.saturating_add(range.len().div_ceil(2))
+                            >= this.history_indices.len();
                         if this.history_near_end {
                             let entity = cx.entity().downgrade();
                             cx.defer(move |cx| {
@@ -809,7 +882,7 @@ impl GitPanel {
                                 h_flex()
                                     .id(("commit", index))
                                     .w_full()
-                                    .h(px(32.))
+                                    .h(px(HISTORY_ROW_HEIGHT))
                                     .px(px(12.))
                                     .when(
                                         this.selected_commit
@@ -1169,7 +1242,7 @@ fn graph_cell(row: crate::graph::GraphRow, width: f32, opacity: f32, cx: &App) -
     let node = row.node;
     div()
         .w(px(width))
-        .h(px(32.))
+        .h(px(HISTORY_ROW_HEIGHT))
         .flex_shrink_0()
         .relative()
         .child(

@@ -2130,6 +2130,7 @@ name = "githly"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-channel",
  "async-io",
  "async-process",
  "chrono",
@@ -2138,6 +2139,7 @@ dependencies = [
  "futures-lite",
  "gpui-kit",
  "image",
+ "raw-window-handle",
  "resvg 0.46.0",
  "semver",
  "serde",

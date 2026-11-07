@@ -5,11 +5,11 @@ pub struct Worktree {
     pub path: PathBuf,
     pub branch: String,
     pub status: String,
-    pub bare: bool,
+    pub available: bool,
 }
 
 impl Git {
-    pub async fn worktrees(&self, root: &Path) -> Result<Vec<Worktree>> {
+    pub(super) async fn worktree_entries(&self, root: &Path) -> Result<Vec<Worktree>> {
         let output = self
             .run(Some(root), ["worktree", "list", "--porcelain", "-z"])
             .await?;
@@ -21,27 +21,33 @@ impl Git {
                     path: PathBuf::from(path),
                     branch: "分离 HEAD".into(),
                     status: "未核对状态".into(),
-                    bare: false,
+                    available: Path::new(path).is_dir(),
                 });
             } else if let Some(entry) = entries.last_mut() {
                 if let Some(branch) = text.strip_prefix("branch refs/heads/") {
                     entry.branch = branch.into();
                 }
                 if text == "bare" {
-                    entry.bare = true;
+                    entry.available = false;
                     entry.branch = "裸仓库".into();
                 }
                 if text.starts_with("locked") {
                     entry.status = "已锁定".into();
                 }
                 if text.starts_with("prunable") {
+                    entry.available = false;
                     entry.status = "目录不可用".into();
                 }
             }
         }
-        // Only read status when this dialog is requested, never every poll for
+        Ok(entries)
+    }
+
+    pub async fn worktrees(&self, root: &Path) -> Result<Vec<Worktree>> {
+        let mut entries = self.worktree_entries(root).await?;
+        // Only read status when the menu is opened, never every poll for
         // all worktrees. Keep serial I/O and a bounded number of queries.
-        for entry in entries.iter_mut().filter(|entry| !entry.bare).take(64) {
+        for entry in entries.iter_mut().filter(|entry| entry.available).take(64) {
             let note = (entry.status != "未核对状态").then(|| entry.status.clone());
             let status = match self
                 .run(

@@ -76,9 +76,9 @@ fn large_history_stream_stress() {
         let (directory, git) = fixture(count);
         futures_lite::future::block_on(async {
             let started = std::time::Instant::now();
-            let mut repo = git.open(directory.path()).await.unwrap();
+            let mut repo = git.open(directory.path(), 46).await.unwrap();
             let first_batch = started.elapsed();
-            assert_eq!(repo.commits.len(), 200);
+            assert_eq!(repo.commits.len(), 46);
             let first_address = &repo.commits[0] as *const Commit;
             let mut stream = HistoryStream::start(&git, &repo).unwrap();
             while !repo.history_complete {
@@ -117,8 +117,8 @@ fn stream_crosses_batches_without_duplicates_or_graph_discontinuity() {
     let (directory, git) = fixture(625);
     futures_lite::future::block_on(async {
         let root = directory.path();
-        let mut repo = git.open(root).await.unwrap();
-        assert_eq!(repo.commits.len(), 200);
+        let mut repo = git.open(root, 46).await.unwrap();
+        assert_eq!(repo.commits.len(), 46);
         let first_address = &repo.commits[0] as *const Commit;
         let initial_head = repo.commits[0].id.clone();
         let mut stream = HistoryStream::start(&git, &repo).unwrap();
@@ -135,7 +135,7 @@ fn stream_crosses_batches_without_duplicates_or_graph_discontinuity() {
                 "external commit",
             ],
         );
-        for expected in [400, 600, 625] {
+        for expected in [146, 246, 346, 446, 546, 625] {
             repo = stream.extend(&repo).await.unwrap();
             assert_eq!(repo.commits.len(), expected);
             assert_eq!(
@@ -168,10 +168,14 @@ fn stream_crosses_batches_without_duplicates_or_graph_discontinuity() {
             repo.graph.iter().cloned().collect::<Vec<_>>(),
             crate::graph::layout(&expected)
         );
-        let pending = git.refresh(&repo, false).await.unwrap().unwrap();
+        for (i, commit) in expected.iter().enumerate() {
+            assert_eq!(repo.commits[i].id, commit.id);
+        }
+        assert!(repo.commits.get(expected.len()).is_none());
+        let pending = git.refresh(&repo, false, 46).await.unwrap().unwrap();
         assert!(pending.history_pending);
         assert!(Arc::ptr_eq(&pending.commits, &repo.commits));
-        let latest = git.refresh(&pending, true).await.unwrap().unwrap();
+        let latest = git.refresh(&pending, true, 46).await.unwrap().unwrap();
         assert_eq!(latest.commits[0].subject, "external commit");
         assert!(!latest.history_pending);
     });
@@ -182,18 +186,18 @@ fn refresh_reuses_history_for_file_changes_and_detects_refs_and_stash() {
     let (directory, git) = fixture(4);
     futures_lite::future::block_on(async {
         let root = directory.path();
-        let repo = git.open(root).await.unwrap();
-        assert!(git.refresh(&repo, true).await.unwrap().is_none());
+        let repo = git.open(root, 46).await.unwrap();
+        assert!(git.refresh(&repo, true, 46).await.unwrap().is_none());
         std::fs::write(root.join("未跟踪.txt"), "hello").unwrap();
-        let changed = git.refresh(&repo, true).await.unwrap().unwrap();
+        let changed = git.refresh(&repo, true, 46).await.unwrap().unwrap();
         assert!(Arc::ptr_eq(&changed.commits, &repo.commits));
         assert_eq!(changed.changes[0].path, "未跟踪.txt");
         command(&git, root, &["stash", "push", "-u", "-m", "external stash"]);
-        let stashed = git.refresh(&changed, true).await.unwrap().unwrap();
+        let stashed = git.refresh(&changed, true, 46).await.unwrap().unwrap();
         assert_eq!(stashed.stashes.len(), 1);
         assert!(stashed.changes.is_empty());
         command(&git, root, &["tag", "v-test"]);
-        let tagged = git.refresh(&stashed, true).await.unwrap().unwrap();
+        let tagged = git.refresh(&stashed, true, 46).await.unwrap().unwrap();
         assert!(
             tagged.commits[0]
                 .references
@@ -208,19 +212,19 @@ fn refresh_reuses_history_for_file_changes_and_detects_refs_and_stash() {
 
 #[test]
 fn stream_exact_boundary_and_empty_repository_are_handled() {
-    let (directory, git) = fixture(400);
+    let (directory, git) = fixture(146);
     futures_lite::future::block_on(async {
-        let repo = git.open(directory.path()).await.unwrap();
+        let repo = git.open(directory.path(), 46).await.unwrap();
         let mut stream = HistoryStream::start(&git, &repo).unwrap();
         let next = stream.extend(&repo).await.unwrap();
-        assert_eq!(next.commits.len(), 400);
+        assert_eq!(next.commits.len(), 146);
         let final_batch = stream.extend(&next).await.unwrap();
-        assert_eq!(final_batch.commits.len(), 400);
+        assert_eq!(final_batch.commits.len(), 146);
         assert!(final_batch.history_complete);
     });
     let empty = tempfile::tempdir().unwrap();
     command(&git, empty.path(), &["init", "-b", "main"]);
-    let repo = futures_lite::future::block_on(git.open(empty.path())).unwrap();
+    let repo = futures_lite::future::block_on(git.open(empty.path(), 46)).unwrap();
     assert!(repo.history_complete && repo.commits.is_empty());
 }
 
@@ -229,17 +233,19 @@ fn branch_browsing_is_read_only_and_checkout_rejects_dirty_worktree() {
     let (directory, git) = fixture(250);
     futures_lite::future::block_on(async {
         let root = directory.path();
-        let repo = git.open(root).await.unwrap();
+        let repo = git.open(root, 46).await.unwrap();
         let side = git
-            .browse(&repo, HistoryScope::Branch("refs/heads/side".into()))
+            .browse(&repo, HistoryScope::Branch("refs/heads/side".into()), 46)
             .await
             .unwrap();
         assert_eq!(side.branch, "main");
         assert_eq!(side.head, repo.head);
         assert_eq!(side.commits[0].subject, "commit 210");
-        let all = git.browse(&repo, HistoryScope::All).await.unwrap();
+        let mut all = git.browse(&repo, HistoryScope::All, 46).await.unwrap();
         let mut stream = HistoryStream::start(&git, &all).unwrap();
-        let all = stream.extend(&all).await.unwrap();
+        while !all.history_complete {
+            all = stream.extend(&all).await.unwrap();
+        }
         assert_eq!(all.commits.len(), 250);
         std::fs::write(root.join("dirty.txt"), "do not lose").unwrap();
         assert!(
@@ -249,10 +255,10 @@ fn branch_browsing_is_read_only_and_checkout_rejects_dirty_worktree() {
                 .to_string()
                 .contains("存在更改")
         );
-        assert_eq!(git.open(root).await.unwrap().branch, "main");
+        assert_eq!(git.open(root, 46).await.unwrap().branch, "main");
         std::fs::remove_file(root.join("dirty.txt")).unwrap();
         git.switch_branch(root, "side").await.unwrap();
-        assert_eq!(git.open(root).await.unwrap().branch, "side");
+        assert_eq!(git.open(root, 46).await.unwrap().branch, "side");
         command(
             &git,
             root,
@@ -287,7 +293,7 @@ fn stash_details_bind_object_and_include_untracked_versions() {
         std::fs::write(root.join("tracked.txt"), "stash contents\n").unwrap();
         std::fs::write(root.join("未跟踪.txt"), "untracked snapshot\n").unwrap();
         command(&git, root, &["stash", "push", "-u", "-m", "first stash"]);
-        let repo = git.open(root).await.unwrap();
+        let repo = git.open(root, 46).await.unwrap();
         let id = repo.stashes[0].id.clone();
         assert_eq!(repo.stashes[0].selector, "stash@{0}");
         std::fs::write(root.join("newer.txt"), "newer stash\n").unwrap();
@@ -338,7 +344,7 @@ fn staged_and_working_changes_keep_distinct_text_and_image_versions() {
         command(&git, root, &["add", "."]);
         std::fs::write(root.join("file.txt"), "base\n").unwrap();
         std::fs::write(root.join("file.png"), b"working image").unwrap();
-        let repo = git.open(root).await.unwrap();
+        let repo = git.open(root, 46).await.unwrap();
         let file = repo
             .changes
             .iter()
@@ -381,7 +387,7 @@ fn staged_and_working_changes_keep_distinct_text_and_image_versions() {
         command(&git, empty.path(), &["init", "-b", "main"]);
         std::fs::write(empty.path().join("new.txt"), "new\n").unwrap();
         command(&git, empty.path(), &["add", "."]);
-        let unborn = git.open(empty.path()).await.unwrap();
+        let unborn = git.open(empty.path(), 46).await.unwrap();
         let diff = git
             .diff_scoped(empty.path(), None, &unborn.changes[0], ChangeScope::All)
             .await
@@ -405,7 +411,7 @@ fn asynchronous_statistics_distinguish_text_binary_and_untracked() {
         std::fs::write(root.join("file.txt"), "one\ntwo\n").unwrap();
         std::fs::write(root.join("binary.dat"), b"a\0b").unwrap();
         std::fs::write(root.join("new.txt"), "new\nlines\n").unwrap();
-        let repo = git.open(root).await.unwrap();
+        let repo = git.open(root, 46).await.unwrap();
         let stats = git
             .line_statistics(root, None, ChangeScope::All, &repo.changes)
             .await
@@ -421,6 +427,32 @@ fn asynchronous_statistics_distinguish_text_binary_and_untracked() {
             .unwrap();
         assert_eq!(stats.files.len(), 1);
         assert_eq!((stats.added, stats.removed), (2, 1));
+    });
+}
+
+#[test]
+fn worktree_visibility_refreshes_without_branch_changes() {
+    let (directory, git) = fixture(1);
+    let root = directory.path();
+    let linked = tempfile::tempdir().unwrap();
+    let path = linked.path().join("detached");
+
+    futures_lite::future::block_on(async {
+        let initial = git.open(root, 46).await.unwrap();
+        assert!(!initial.has_other_worktrees);
+
+        command(
+            &git,
+            root,
+            &["worktree", "add", "--detach", path.to_str().unwrap()],
+        );
+        let multiple = git.refresh(&initial, true, 46).await.unwrap().unwrap();
+        assert!(multiple.has_other_worktrees);
+        assert!(git.open(&path, 46).await.unwrap().has_other_worktrees);
+
+        command(&git, root, &["worktree", "remove", path.to_str().unwrap()]);
+        let single = git.refresh(&multiple, true, 46).await.unwrap().unwrap();
+        assert!(!single.has_other_worktrees);
     });
 }
 
@@ -443,8 +475,8 @@ fn linked_worktrees_report_status_and_checkout_respects_occupancy() {
             .find(|entry| entry.branch == "linked")
             .unwrap();
         assert!(worktree.status.contains("更改"));
-        assert_eq!(git.open(&worktree.path).await.unwrap().branch, "linked");
+        assert_eq!(git.open(&worktree.path, 46).await.unwrap().branch, "linked");
         assert!(git.switch_branch(directory.path(), "linked").await.is_err());
-        assert_eq!(git.open(directory.path()).await.unwrap().branch, "main");
+        assert_eq!(git.open(directory.path(), 46).await.unwrap().branch, "main");
     });
 }

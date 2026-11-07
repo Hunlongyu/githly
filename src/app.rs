@@ -79,6 +79,7 @@ pub struct GitPanel {
     project_generation: u64,
     refresh_error: Option<String>,
     window: AnyWindowHandle,
+    initial_history_limit: usize,
     history_scroll: UniformListScrollHandle,
     history_stream: Option<crate::git::HistoryStream>,
     history_task: Option<Task<()>>,
@@ -118,7 +119,6 @@ impl GitPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let initial_project = initial_project.or_else(|| config.active_project.clone());
         let file_search = cx.new(|cx| InputState::new(window, cx).placeholder("按路径筛选更改"));
         let history_search =
             cx.new(|cx| InputState::new(window, cx).placeholder("搜索说明、作者、哈希"));
@@ -172,6 +172,7 @@ impl GitPanel {
             project_generation: 0,
             refresh_error: None,
             window: window.window_handle(),
+            initial_history_limit: view::initial_history_limit(window),
             history_scroll: UniformListScrollHandle::new(),
             history_stream: None,
             history_task: None,
@@ -190,7 +191,7 @@ impl GitPanel {
             history_focus: cx.focus_handle(),
             files_focus: cx.focus_handle(),
             changes_focus: cx.focus_handle(),
-            changes_scroll: UniformListScrollHandle::new(),
+            changes_scroll: Default::default(),
             branch_open: false,
             switching_branch: false,
             initial_project,
@@ -345,8 +346,9 @@ impl GitPanel {
         self.detail_files_scroll = UniformListScrollHandle::new();
     }
 
-    fn load_project(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+    pub(crate) fn load_project(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         let Some(git) = self.git.clone() else {
+            self.initial_project = Some(path);
             return;
         };
         self.release_project(cx);
@@ -354,7 +356,8 @@ impl GitPanel {
         self.error = None;
         self.stash_tab = false;
         let project_generation = self.project_generation;
-        let task = cx.background_spawn(async move { git.open(&path).await });
+        let limit = self.initial_history_limit;
+        let task = cx.background_spawn(async move { git.open(&path, limit).await });
         self.load_task = Some(cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
@@ -365,7 +368,6 @@ impl GitPanel {
                 match result {
                     Ok(repository) => {
                         this.config.remember_project(&repository.root);
-                        let has_commits = !repository.commits.is_empty();
                         this.branch_picker.update(cx, |picker, cx| {
                             picker.set_branches(repository.branches.clone(), cx);
                         });
@@ -374,9 +376,6 @@ impl GitPanel {
                         this.last_read =
                             Some(chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
                         this.save(cx);
-                        if has_commits {
-                            this.select_commit(0, cx);
-                        }
                         this.start_auto_refresh(cx);
                         this.update_statistics(true, cx);
                     }
@@ -600,6 +599,7 @@ impl GitPanel {
 
 impl Render for GitPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.initial_history_limit = view::initial_history_limit(window);
         let mut title = h_flex()
             .w_full()
             .h_full()
@@ -633,7 +633,6 @@ impl Render for GitPanel {
                         let open = view.clone();
                         let close = view.clone();
                         let clear = view.clone();
-                        let worktrees = view.clone();
                         let mut menu = menu
                             .max_w(px(460.))
                             .max_h(px(420.))
@@ -657,12 +656,6 @@ impl Render for GitPanel {
                             );
                         }
                         menu.separator()
-                            .item(PopupMenuItem::new("已有工作目录…").on_click(
-                                move |_, window, cx| {
-                                    let _ = worktrees
-                                        .update(cx, |this, cx| this.open_worktrees(window, cx));
-                                },
-                            ))
                             .item(
                                 PopupMenuItem::new("加载其他项目…").on_click(move |_, _, cx| {
                                     let _ = open.update(cx, |this, cx| this.choose_path(false, cx));
@@ -681,13 +674,20 @@ impl Render for GitPanel {
                             .item(PopupMenuItem::new("关闭项目").on_click(move |_, _, cx| {
                                 let _ = close.update(cx, |this, cx| {
                                     this.release_project(cx);
-                                    this.config.active_project = None;
-                                    this.save(cx);
                                     cx.notify();
                                 });
                             }))
                     }),
             ));
+            if repository.has_other_worktrees
+                && let Some(git) = &self.git
+            {
+                title = title.child(title_control(worktrees::dropdown(
+                    git.clone(),
+                    repository.root.clone(),
+                    cx.entity().downgrade(),
+                )));
+            }
             title = title.child(title_control(
                 gpui_kit::component::popover::Popover::new("branches-popover")
                     .p_0()
@@ -785,24 +785,27 @@ impl Render for GitPanel {
                     return;
                 }
                 let Some(repo) = &this.repository else { return };
-                let indices: Vec<usize> = if working {
-                    file_list::scoped_change_rows(
+                if !matches!(event.keystroke.key.as_str(), "down" | "up" | "home" | "end")
+                    || (working && this.stash_tab)
+                {
+                    return;
+                }
+                let (indices, tracked_count) = if working {
+                    let [mut tracked, mut untracked] = file_list::grouped_file_indices(
                         &repo.changes,
                         &this.file_search.read(cx).value(),
-                        this.collapsed_change_groups,
                         this.change_scope,
-                    )
-                    .into_iter()
-                    .filter_map(|row| {
-                        if let file_list::ChangeRow::File(i) = row {
-                            Some(i)
-                        } else {
-                            None
-                        }
-                    })
-                    .collect()
+                    );
+                    if this.collapsed_change_groups[0] {
+                        tracked.clear();
+                    }
+                    let tracked_count = tracked.len();
+                    if !this.collapsed_change_groups[1] {
+                        tracked.append(&mut untracked);
+                    }
+                    (tracked, tracked_count)
                 } else {
-                    (0..this.files.len()).collect()
+                    ((0..this.files.len()).collect(), 0)
                 };
                 if indices.is_empty() {
                     return;
@@ -827,18 +830,19 @@ impl Render for GitPanel {
                 };
                 if working {
                     this.select_change(indices[position], cx);
-                    let rows = file_list::scoped_change_rows(
-                        &this.repository.as_ref().unwrap().changes,
-                        &this.file_search.read(cx).value(),
-                        this.collapsed_change_groups,
-                        this.change_scope,
-                    );
-                    if let Some(row) = rows.iter().position(|row| {
-                        matches!(row,
-                        file_list::ChangeRow::File(index) if *index == indices[position])
-                    }) {
-                        this.changes_scroll
-                            .scroll_to_item(row, ScrollStrategy::Nearest);
+                    if position < tracked_count {
+                        // Leave room below the selected row for the pinned header.
+                        let scroll = &this.changes_scroll;
+                        let top = -scroll.0.borrow().base_handle.offset().y;
+                        let row =
+                            position + usize::from(px(view::FILE_ROW_HEIGHT) * position >= top);
+                        scroll.scroll_to_item(row, ScrollStrategy::Nearest);
+                    } else {
+                        this.changes_scroll.scroll_to_item_with_offset(
+                            position + 1,
+                            ScrollStrategy::Nearest,
+                            1,
+                        );
                     }
                 } else {
                     this.select_file(indices[position], cx);

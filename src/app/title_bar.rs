@@ -5,12 +5,14 @@ use gpui_kit::component::{Icon, IconName, h_flex};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
+pub(super) const TITLE_BAR_HEIGHT: f32 = 40.;
+
 // Caption buttons have their own colors. In particular, the close button must
 // not inherit the semantic danger color used for removed lines and error text.
 #[cfg(target_os = "windows")]
 pub(super) fn title_bar(content: impl IntoElement, window: &Window, cx: &App) -> AnyElement {
     h_flex()
-        .h(px(40.))
+        .h(px(TITLE_BAR_HEIGHT))
         .w_full()
         .flex_shrink_0()
         .border_b_1()
@@ -93,7 +95,7 @@ fn caption_button(
 #[cfg(not(target_os = "windows"))]
 pub(super) fn title_bar(content: impl IntoElement, _: &Window, cx: &App) -> AnyElement {
     gpui_kit::component::TitleBar::new()
-        .h(px(40.))
+        .h(px(TITLE_BAR_HEIGHT))
         .bg(cx.theme().title_bar)
         .child(content)
         .into_any_element()

@@ -27,7 +27,7 @@ impl GitPanel {
         self.history_filter_generation = self.history_filter_generation.wrapping_add(1);
         self.history_filtering = false;
         self.history_scroll = UniformListScrollHandle::new();
-        self.changes_scroll = UniformListScrollHandle::new();
+        self.changes_scroll = Default::default();
         self.branch_picker.update(cx, |picker, cx| picker.clear(cx));
         // Large file lists are released on the executor, not during a click.
         let previous = self.repository.take();
@@ -63,11 +63,15 @@ impl GitPanel {
                 }) else {
                     break;
                 };
-                let Ok(Some(update_history)) = this.update(cx, |this, _| {
+                let Ok(Some((update_history, initial_limit))) = this.update(cx, |this, _| {
                     if this.history_loading {
                         return None;
                     }
-                    Some(this.history_scroll.0.borrow().base_handle.offset().y >= px(-32.))
+                    Some((
+                        this.history_scroll.0.borrow().base_handle.offset().y
+                            >= px(-view::HISTORY_ROW_HEIGHT),
+                        this.initial_history_limit,
+                    ))
                 }) else {
                     continue;
                 };
@@ -75,7 +79,9 @@ impl GitPanel {
                 // One task owns both timer and query. No tick queue, overlap,
                 // watcher thread, or accumulating snapshot cache.
                 let result = executor
-                    .spawn(async move { git.refresh(&previous, update_history).await })
+                    .spawn(
+                        async move { git.refresh(&previous, update_history, initial_limit).await },
+                    )
                     .await;
                 let Ok(retired) = this.update(cx, |this, cx| {
                     if this.project_generation != generation {
@@ -132,7 +138,7 @@ impl GitPanel {
         let history_changed = !Arc::ptr_eq(&previous.commits, &next.commits);
         let branches_changed = previous.branches != next.branches;
         let offset = self.history_scroll.0.borrow().base_handle.offset();
-        let top = ((-f32::from(offset.y)).max(0.) / 32.).floor() as usize;
+        let top = ((-f32::from(offset.y)).max(0.) / view::HISTORY_ROW_HEIGHT).floor() as usize;
         let anchor = self
             .history_indices
             .get(top)
@@ -152,12 +158,11 @@ impl GitPanel {
                     .iter()
                     .position(|index| self.repository.as_ref().unwrap().commits[*index].id == id)
             }) {
-                let remainder = f32::from(offset.y) + top as f32 * 32.;
-                self.history_scroll
-                    .0
-                    .borrow()
-                    .base_handle
-                    .set_offset(point(offset.x, px(-(position as f32) * 32. + remainder)));
+                let remainder = f32::from(offset.y) + top as f32 * view::HISTORY_ROW_HEIGHT;
+                self.history_scroll.0.borrow().base_handle.set_offset(point(
+                    offset.x,
+                    px(-(position as f32) * view::HISTORY_ROW_HEIGHT + remainder),
+                ));
             }
         }
         // Details are an independently owned snapshot. New commits, reset,
