@@ -135,7 +135,14 @@ fn decode_svg(bytes: &[u8]) -> Result<(RgbaImage, u32, u32)> {
     // A Git blob must not resolve external files from the current working directory.
     options.image_href_resolver.resolve_string = Box::new(|_, _| None);
     if std::str::from_utf8(bytes).is_ok_and(|svg| svg.contains("<text")) {
-        options.fontdb_mut().load_system_fonts();
+        static FONTS: std::sync::OnceLock<Arc<usvg::fontdb::Database>> = std::sync::OnceLock::new();
+        options.fontdb = FONTS
+            .get_or_init(|| {
+                let mut fonts = usvg::fontdb::Database::new();
+                fonts.load_system_fonts();
+                Arc::new(fonts)
+            })
+            .clone();
     }
     let tree = usvg::Tree::from_data(bytes, &options).context(messages().parse_svg())?;
     let original = tree.size().to_int_size();
@@ -267,24 +274,10 @@ fn image_canvas(pixels: Arc<RenderImage>, cx: &App) -> impl IntoElement {
         |_, _, _| (),
         move |bounds, _, window, _| {
             window.paint_quad(fill(bounds, base));
-            let edge = px(12.);
-            for row in 0..(bounds.size.height / edge).ceil() as usize {
-                for column in 0..(bounds.size.width / edge).ceil() as usize {
-                    if (row + column) % 2 == 0 {
-                        let origin = bounds.origin + point(edge * column as f32, edge * row as f32);
-                        window.paint_quad(fill(
-                            Bounds::new(
-                                origin,
-                                size(
-                                    edge.min(bounds.right() - origin.x),
-                                    edge.min(bounds.bottom() - origin.y),
-                                ),
-                            ),
-                            alternate,
-                        ));
-                    }
-                }
-            }
+            window.paint_quad(fill(
+                bounds,
+                gpui_kit::checkerboard(alternate, 12. * window.scale_factor()),
+            ));
             // Use the actual viewport, without an intrinsic image layout size.
             let area = Bounds::new(
                 bounds.origin + point(px(12.), px(12.)),

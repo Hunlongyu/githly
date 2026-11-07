@@ -78,20 +78,29 @@ impl GitPanel {
         let executor = cx.background_executor().clone();
         self.updates.progress = Some((0, total));
         let task = cx.background_spawn(async move { update::download(&available, &counter) });
-        self.updates.task = Some(cx.spawn(async move |this, cx| {
-            let result = futures_lite::future::race(task, async {
-                loop {
-                    executor.timer(Duration::from_millis(125)).await;
-                    let progress = (received.load(Ordering::Relaxed), total);
-                    this.update(cx, |this, cx| {
+        let progress_task = cx.spawn(async move |this, cx| {
+            loop {
+                executor.timer(Duration::from_millis(125)).await;
+                let progress = (received.load(Ordering::Relaxed), total);
+                if this
+                    .update(cx, |this, cx| {
                         if this.updates.progress != Some(progress) {
                             this.updates.progress = Some(progress);
                             cx.notify();
                         }
-                    })?;
+                    })
+                    .is_err()
+                {
+                    break;
                 }
-            })
-            .await;
+            }
+        });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            drop(progress_task);
+            if let Err(error) = &result {
+                tracing::warn!("Update download failed: {error:#}");
+            }
             let _ = this.update(cx, |this, cx| {
                 this.updates.progress = None;
                 this.updates.busy = false;
@@ -104,7 +113,8 @@ impl GitPanel {
                 }
                 cx.notify();
             });
-        }));
+        })
+        .detach();
         cx.notify();
     }
 

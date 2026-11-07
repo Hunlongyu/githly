@@ -6,27 +6,32 @@ impl GitPanel {
         self.history_task = None;
         self.history_loading = false;
         self.history_near_end = false;
+        self.history_load_requested = false;
         self.history_error = None;
         self.history_retry_after = None;
         let stream = self.history_stream.take();
         cx.background_spawn(async move { drop(stream) }).detach();
     }
 
-    pub(super) fn load_more_history(&mut self, cx: &mut Context<Self>) {
-        if self.history_loading
-            || !self.history_search.read(cx).value().is_empty()
-            || self
+    pub(super) fn can_load_more_history(&self, cx: &Context<Self>) -> bool {
+        !self.history_loading
+            && self
+                .repository
+                .as_ref()
+                .is_some_and(|repo| !repo.history_complete && !repo.commits.is_empty())
+            && self.history_search.read(cx).text().len() == 0
+            && self
                 .history_retry_after
-                .is_some_and(|time| Instant::now() < time)
-        {
+                .is_none_or(|time| Instant::now() >= time)
+    }
+
+    pub(super) fn load_more_history(&mut self, cx: &mut Context<Self>) {
+        if !self.can_load_more_history(cx) {
             return;
         }
         let Some(previous) = self.repository.clone() else {
             return;
         };
-        if previous.history_complete || previous.commits.is_empty() {
-            return;
-        }
         let Some(git) = self.git.clone() else { return };
         let stream = self.history_stream.take();
         let generation = self.project_generation;
@@ -61,7 +66,7 @@ impl GitPanel {
                         let retired = this.repository.replace(Arc::new(next));
                         let start = this.history_indices.len();
                         let end = this.repository.as_ref().unwrap().commits.len();
-                        if this.history_search.read(cx).value().is_empty() {
+                        if this.history_search.read(cx).text().len() == 0 {
                             this.history_indices.extend(start..end);
                         } else {
                             this.filter_history(cx);

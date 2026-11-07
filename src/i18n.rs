@@ -57,9 +57,7 @@ impl Language {
 }
 
 pub fn init(preference: Language) {
-    ACTIVE
-        .set(preference.resolve())
-        .expect("language already initialized");
+    ACTIVE.get_or_init(|| preference.resolve());
 }
 
 pub fn messages() -> Locale {
@@ -78,6 +76,18 @@ mod tests {
         assert_eq!(zh.settings(), "设置");
         assert_eq!(en.history_scope("开发/feature"), "History · 开发/feature");
         assert_eq!(zh.history_scope("开发/feature"), "历史 · 开发/feature");
+    }
+
+    #[test]
+    fn repeated_initialization_keeps_the_first_locale() {
+        init(Language::System);
+        let first = messages();
+        init(if first == Locale::Chinese {
+            Language::English
+        } else {
+            Language::Chinese
+        });
+        assert_eq!(messages(), first);
     }
 
     #[test]

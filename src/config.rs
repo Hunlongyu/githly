@@ -4,6 +4,7 @@ use directories::BaseDirs;
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
+    io::Write,
     path::{Path, PathBuf},
 };
 
@@ -121,11 +122,34 @@ impl ConfigStore {
             .parent()
             .context(messages().invalid_config_dir())?;
         fs::create_dir_all(directory).context(messages().create_config_dir())?;
-        let temporary = directory.join("config.json.tmp");
-        fs::write(&temporary, serde_json::to_vec_pretty(config)?)
+        let mut temporary =
+            tempfile::NamedTempFile::new_in(directory).context(messages().write_config())?;
+        temporary
+            .write_all(&serde_json::to_vec_pretty(config)?)
             .context(messages().write_config())?;
-        fs::rename(&temporary, &self.path).context(messages().save_config())?;
-        Ok(())
+        temporary
+            .as_file()
+            .sync_all()
+            .context(messages().write_config())?;
+        let mut path = temporary.into_temp_path();
+        let mut retries = 0;
+        loop {
+            match path.persist(&self.path) {
+                Ok(()) => return Ok(()),
+                // MoveFileEx can briefly deny access while another writer is
+                // replacing the destination or a reader still holds it open.
+                Err(error)
+                    if cfg!(windows)
+                        && retries < 8
+                        && matches!(error.error.raw_os_error(), Some(5 | 32)) =>
+                {
+                    path = error.path;
+                    std::thread::sleep(std::time::Duration::from_millis(1 << retries));
+                    retries += 1;
+                }
+                Err(error) => return Err(error).context(messages().save_config()),
+            }
+        }
     }
 }
 
@@ -168,6 +192,31 @@ mod tests {
                 .contains_key("diff_soft_wrap")
         );
     }
+    #[test]
+    fn concurrent_saves_publish_complete_configs() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ConfigStore {
+            path: dir.path().join("config.json"),
+        };
+        let start = std::sync::Barrier::new(8);
+        std::thread::scope(|threads| {
+            for index in 0..8 {
+                let start = &start;
+                let store = &store;
+                threads.spawn(move || {
+                    let config = Config {
+                        recent_projects: vec![format!("project-{index}").into()],
+                        ..Default::default()
+                    };
+                    start.wait();
+                    store.save(&config).unwrap();
+                    assert_eq!(store.load().unwrap().recent_projects.len(), 1);
+                });
+            }
+        });
+        assert_eq!(dir.path().read_dir().unwrap().count(), 1);
+    }
+
     #[test]
     fn malformed_config_is_not_replaced_on_load() {
         let dir = tempfile::tempdir().unwrap();

@@ -15,7 +15,13 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
 mod auto_refresh;
 mod branch_picker;
@@ -44,6 +50,26 @@ gpui_kit::actions!(
     [OpenProject, OpenSettings, FocusHistory, ToggleBranches]
 );
 
+/// The query has already been lowercased. Preserve Unicode lowercase semantics
+/// (including contextual Greek sigma) when non-ASCII case mapping is needed.
+fn matches_query(text: &str, query: &str) -> bool {
+    if query.is_empty() {
+        return true;
+    }
+    if text
+        .as_bytes()
+        .windows(query.len())
+        .any(|part| part.eq_ignore_ascii_case(query.as_bytes()))
+    {
+        return true;
+    }
+    !text.is_ascii()
+        && text
+            .chars()
+            .any(|ch| !ch.is_ascii() && ch.to_lowercase().ne(std::iter::once(ch)))
+        && text.to_lowercase().contains(query)
+}
+
 pub struct GitPanel {
     store: ConfigStore,
     config: Config,
@@ -54,6 +80,7 @@ pub struct GitPanel {
     detecting: bool,
     stash_tab: bool,
     collapsed_change_groups: [bool; 2],
+    file_rows: Option<Arc<file_list::FileRows>>,
     change_scope: ChangeScope,
     detail_change_scope: ChangeScope,
     statistics: crate::git::LineStatistics,
@@ -85,10 +112,11 @@ pub struct GitPanel {
     history_task: Option<Task<()>>,
     history_loading: bool,
     history_near_end: bool,
+    history_load_requested: bool,
     history_error: Option<String>,
     history_retry_after: Option<std::time::Instant>,
     history_filter_task: Option<Task<()>>,
-    history_filter_generation: u64,
+    history_filter_generation: Arc<AtomicU64>,
     history_filtering: bool,
     detail_task: Option<Task<()>>,
     diff_task: Option<Task<()>>,
@@ -123,8 +151,9 @@ impl GitPanel {
             cx.new(|cx| InputState::new(window, cx).placeholder(messages().filter_paths()));
         let history_search =
             cx.new(|cx| InputState::new(window, cx).placeholder(messages().search_history()));
-        cx.subscribe(&file_search, |_, _, event: &InputEvent, cx| {
+        cx.subscribe(&file_search, |this, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
+                this.file_rows = None;
                 cx.notify();
             }
         })
@@ -146,6 +175,7 @@ impl GitPanel {
             detecting: false,
             stash_tab: false,
             collapsed_change_groups: [false; 2],
+            file_rows: None,
             change_scope: ChangeScope::All,
             detail_change_scope: ChangeScope::All,
             statistics: crate::git::LineStatistics::default(),
@@ -177,10 +207,11 @@ impl GitPanel {
             history_task: None,
             history_loading: false,
             history_near_end: false,
+            history_load_requested: false,
             history_error: None,
             history_retry_after: None,
             history_filter_task: None,
-            history_filter_generation: 0,
+            history_filter_generation: Default::default(),
             history_filtering: false,
             detail_task: None,
             diff_task: None,
@@ -467,9 +498,11 @@ impl GitPanel {
         self.diff_message = messages().loading_files().into();
         let generation = self.generation;
         let task = cx.background_spawn(async move {
-            let files = git.commit_files(&root, &commit.id).await?;
-            let body = git.commit_body(&root, &commit.id).await?;
-            anyhow::Ok((files, body))
+            futures_lite::future::try_zip(
+                git.commit_files(&root, &commit.id),
+                git.commit_body(&root, &commit.id),
+            )
+            .await
         });
         self.detail_task = Some(cx.spawn(async move |this, cx| {
             let result = task.await;
@@ -847,53 +880,42 @@ impl Render for GitPanel {
                 if !working && !this.files_focus.is_focused(window) {
                     return;
                 }
-                let Some(repo) = &this.repository else { return };
+                let Some(files) = this.repository.as_ref().map(|repo| repo.changes.clone()) else {
+                    return;
+                };
                 if !matches!(event.keystroke.key.as_str(), "down" | "up" | "home" | "end")
                     || (working && this.stash_tab)
                 {
                     return;
                 }
-                let (indices, tracked_count) = if working {
-                    let [mut tracked, mut untracked] = file_list::grouped_file_indices(
-                        &repo.changes,
-                        &this.file_search.read(cx).value(),
-                        this.change_scope,
-                    );
-                    if this.collapsed_change_groups[0] {
-                        tracked.clear();
-                    }
-                    let tracked_count = tracked.len();
-                    if !this.collapsed_change_groups[1] {
-                        tracked.append(&mut untracked);
-                    }
-                    (tracked, tracked_count)
-                } else {
-                    ((0..this.files.len()).collect(), 0)
-                };
-                if indices.is_empty() {
+                let rows = working.then(|| this.working_rows(&files, cx));
+                let count = rows
+                    .as_ref()
+                    .map_or(this.files.len(), |rows| rows.indices.len());
+                if count == 0 {
                     return;
                 }
-                let current = if working {
+                let current = if let Some(rows) = &rows {
                     this.selected_file
                         .and_then(|i| this.files.get(i))
                         .and_then(|selected| {
-                            indices
+                            rows.indices
                                 .iter()
-                                .position(|i| repo.changes[*i].path == selected.path)
+                                .position(|i| files[*i].path == selected.path)
                         })
                 } else {
                     this.selected_file
                 };
                 let position = match event.keystroke.key.as_str() {
-                    "down" => current.map_or(0, |i| (i + 1).min(indices.len() - 1)),
+                    "down" => current.map_or(0, |i| (i + 1).min(count - 1)),
                     "up" => current.unwrap_or(0).saturating_sub(1),
                     "home" => 0,
-                    "end" => indices.len() - 1,
+                    "end" => count - 1,
                     _ => return,
                 };
-                if working {
-                    this.select_change(indices[position], cx);
-                    if position < tracked_count {
+                if let Some(rows) = rows {
+                    this.select_change(rows.indices[position], cx);
+                    if position < rows.header_row {
                         // Leave room below the selected row for the pinned header.
                         let scroll = &this.changes_scroll;
                         let top = -scroll.0.borrow().base_handle.offset().y;
@@ -908,7 +930,7 @@ impl Render for GitPanel {
                         );
                     }
                 } else {
-                    this.select_file(indices[position], cx);
+                    this.select_file(position, cx);
                     this.detail_files_scroll
                         .scroll_to_item(position, ScrollStrategy::Nearest);
                 }

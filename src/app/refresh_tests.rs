@@ -269,6 +269,7 @@ fn change_groups_scroll_together_with_visible_headers(cx: &mut TestAppContext) {
         let viewport = scroll.0.borrow().base_handle.bounds();
         let header =
             |window: &gpui_kit::Window, group: usize| window.find(("file-group", group)).bounds();
+        let initial_rows = panel.read(cx).file_rows.clone().unwrap();
         let upper = header(window, 0);
         assert_eq!(upper.bottom(), viewport.top());
         assert_eq!(header(window, 1).bottom(), viewport.bottom());
@@ -281,6 +282,10 @@ fn change_groups_scroll_together_with_visible_headers(cx: &mut TestAppContext) {
 
         scroll.scroll_to_item_strict(200, ScrollStrategy::Center);
         window.render_frame(cx);
+        assert!(Arc::ptr_eq(
+            &initial_rows,
+            panel.read(cx).file_rows.as_ref().unwrap()
+        ));
         let middle = header(window, 1);
         assert!(middle.top() > upper.bottom() && middle.bottom() < viewport.bottom());
         scroll.scroll_to_bottom();
@@ -289,9 +294,13 @@ fn change_groups_scroll_together_with_visible_headers(cx: &mut TestAppContext) {
         assert_eq!(header(window, 1).top(), upper.bottom());
 
         panel.update(cx, |panel, cx| {
-            Arc::make_mut(panel.repository.as_mut().unwrap())
+            let repo = Arc::make_mut(panel.repository.as_mut().unwrap());
+            repo.changes = repo
                 .changes
-                .retain(|file| file.status == "??" || file.path == "file-0.txt");
+                .iter()
+                .filter(|file| file.status == "??" || file.path == "file-0.txt")
+                .cloned()
+                .collect();
             cx.notify();
         });
         window.render_frame(cx);
@@ -495,12 +504,13 @@ fn stash_empty_state_is_centered_and_gives_way_to_the_list(cx: &mut TestAppConte
         assert!(window.try_find("stash-list").is_none());
         panel.update(cx, |p, cx| {
             let repo = Arc::make_mut(p.repository.as_mut().unwrap());
-            repo.stashes.push(crate::git::Stash {
+            repo.stashes = vec![crate::git::Stash {
                 id: repo.commits[0].id.clone(),
                 selector: "stash@{0}".into(),
                 subject: "Saved changes".into(),
                 date: String::new(),
-            });
+            }]
+            .into();
             cx.notify();
         });
         window.render_frame(cx);
@@ -548,7 +558,7 @@ fn refresh_keeps_commit_diff_and_scroll_anchor_and_close_releases_session(cx: &m
             "new head",
         ],
     );
-    let next = futures_lite::future::block_on(git.refresh(&previous, true, 46))
+    let next = futures_lite::future::block_on(git.refresh(&previous, true, true, 46))
         .unwrap()
         .unwrap();
     let (window, panel) = cx.update(|cx| {

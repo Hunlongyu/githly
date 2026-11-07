@@ -37,7 +37,7 @@ fn branch_rows(branches: &[Branch], query: &str, collapsed: [bool; 2]) -> Vec<Br
             .iter()
             .enumerate()
             .filter(|(_, branch)| {
-                branch.remote == remote && branch.name.to_lowercase().contains(&query)
+                branch.remote == remote && super::matches_query(&branch.name, &query)
             })
             .map(|(index, _)| index)
             .collect();

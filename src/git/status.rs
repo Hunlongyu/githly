@@ -5,14 +5,17 @@ pub(super) struct Status {
     pub head: Option<String>,
     pub branch: String,
     pub tracking: Option<BranchTracking>,
-    pub changes: Vec<ChangedFile>,
+    pub changes: Arc<[ChangedFile]>,
+    pub changes_digest: [u8; 32],
 }
 
-pub(super) fn parse(bytes: &[u8]) -> Result<Status> {
+pub(super) fn parse(bytes: &[u8], previous: Option<&Repository>) -> Result<Status> {
     let mut records = bytes.split(|b| *b == 0).peekable();
     let mut oid = None;
     let mut branch = None;
+    let mut header_len = 0;
     while let Some(header) = records.next_if(|record| record.starts_with(b"# ")) {
+        header_len += header.len() + 1;
         if let Some(value) = header.strip_prefix(b"# branch.oid ") {
             oid = Some(value);
         } else if let Some(value) = header.strip_prefix(b"# branch.head ") {
@@ -22,6 +25,24 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Status> {
     let oid = oid.context(messages().missing_head())?;
     let branch = branch.context(messages().missing_branch())?;
     let tracking = parse_tracking(bytes);
+    use sha2::{Digest, Sha256};
+    let changes_digest = Sha256::digest(&bytes[header_len.min(bytes.len())..]).into();
+    let changes = if let Some(repo) = previous.filter(|repo| repo.changes_digest == changes_digest)
+    {
+        repo.changes.clone()
+    } else {
+        parse_changes(records)?.into()
+    };
+    Ok(Status {
+        head: (oid != b"(initial)").then(|| String::from_utf8_lossy(oid).into_owned()),
+        branch,
+        tracking,
+        changes,
+        changes_digest,
+    })
+}
+
+fn parse_changes<'a>(mut records: impl Iterator<Item = &'a [u8]>) -> Result<Vec<ChangedFile>> {
     let mut changes = Vec::new();
     while let Some(record) = records.next() {
         if record.is_empty() {
@@ -66,12 +87,7 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Status> {
             original_path,
         });
     }
-    Ok(Status {
-        head: (oid != b"(initial)").then(|| String::from_utf8_lossy(oid).into_owned()),
-        branch,
-        tracking,
-        changes,
-    })
+    Ok(changes)
 }
 
 #[cfg(test)]
@@ -90,6 +106,7 @@ mod tests {
                 "? new\nfile.txt\0",
             )
             .as_bytes(),
+            None,
         )
         .unwrap();
         assert_eq!(status.head.as_deref(), Some("abc"));

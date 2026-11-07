@@ -1,5 +1,4 @@
 use super::controls;
-use super::file_list::grouped_file_indices;
 use super::*;
 use crate::i18n::messages;
 use gpui_kit::component::{
@@ -65,11 +64,16 @@ impl UniformListDecoration for UntrackedHeader {
 }
 
 impl GitPanel {
-    pub(super) fn filter_history(&mut self, cx: &mut Context<Self>) {
-        let query = self.history_search.read(cx).value().to_lowercase();
-        self.history_filter_generation = self.history_filter_generation.wrapping_add(1);
+    pub(super) fn cancel_history_filter(&mut self) {
+        self.history_filter_generation
+            .fetch_add(1, Ordering::Relaxed);
         self.history_filter_task = None;
         self.history_filtering = false;
+    }
+
+    pub(super) fn filter_history(&mut self, cx: &mut Context<Self>) {
+        let query = self.history_search.read(cx).value().to_lowercase();
+        self.cancel_history_filter();
         let Some(repository) = self.repository.clone() else {
             self.history_indices = Vec::new();
             return;
@@ -81,7 +85,8 @@ impl GitPanel {
         self.history_filtering = true;
         // Existing indices may belong to the old history after a ref change.
         self.history_indices.clear();
-        let generation = self.history_filter_generation;
+        let cancellation = self.history_filter_generation.clone();
+        let generation = cancellation.load(Ordering::Relaxed);
         let executor = cx.background_executor().clone();
         self.history_filter_task = Some(cx.spawn(async move |this, cx| {
             executor.timer(std::time::Duration::from_millis(150)).await;
@@ -89,22 +94,26 @@ impl GitPanel {
                 .spawn(async move {
                     let mut indices = Vec::new();
                     for (index, commit) in repository.commits.iter().enumerate() {
-                        if index > 0 && index % 256 == 0 {
+                        if index % 256 == 0 {
                             // Let a replaced search task stop before visiting more commits.
+                            if cancellation.load(Ordering::Relaxed) != generation {
+                                return None;
+                            }
                             futures_lite::future::yield_now().await;
                         }
                         if commit.id.contains(&query)
-                            || commit.subject.to_lowercase().contains(&query)
-                            || commit.author.to_lowercase().contains(&query)
+                            || matches_query(&commit.subject, &query)
+                            || matches_query(&commit.author, &query)
                         {
                             indices.push(index);
                         }
                     }
-                    indices
+                    Some(indices)
                 })
                 .await;
+            let Some(indices) = indices else { return };
             let _ = this.update(cx, |this, cx| {
-                if this.history_filter_generation == generation {
+                if this.history_filter_generation.load(Ordering::Relaxed) == generation {
                     this.history_indices = indices;
                     this.history_filtering = false;
                     cx.notify();
@@ -518,31 +527,21 @@ impl GitPanel {
             .into_any_element()
     }
 
-    fn working_file_groups(&self, files: &[ChangedFile], cx: &mut Context<Self>) -> Div {
-        let [mut tracked, mut untracked] =
-            grouped_file_indices(files, &self.file_search.read(cx).value(), self.change_scope);
-        let tracked_count = tracked.len();
-        let untracked_count = untracked.len();
-        if self.collapsed_change_groups[0] {
-            tracked.clear();
-        }
-        let header_row = tracked.len();
-        if !self.collapsed_change_groups[1] {
-            tracked.append(&mut untracked);
-        }
-        let indices = tracked;
+    fn working_file_groups(&mut self, files: &Arc<[ChangedFile]>, cx: &mut Context<Self>) -> Div {
+        let rows = self.working_rows(files, cx);
+        let [tracked_count, untracked_count] = rows.counts;
+        let header_row = rows.header_row;
         let list = uniform_list(
             "working-files",
-            indices.len() + 1,
+            rows.indices.len() + 1,
             cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
-                let files = &this.repository.as_ref().unwrap().changes;
                 range
                     .map(|row| {
                         if row == header_row {
                             return div().h(px(FILE_ROW_HEIGHT)).into_any_element();
                         }
-                        let index = indices[row - usize::from(row > header_row)];
-                        this.file_row(&files[index], index, true, cx)
+                        let index = rows.indices[row - usize::from(row > header_row)];
+                        this.file_row(&rows.files[index], index, true, cx)
                     })
                     .collect::<Vec<_>>()
             }),
@@ -572,8 +571,8 @@ impl GitPanel {
             )
     }
 
-    pub(super) fn workspace(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let repo = self.repository.as_ref().unwrap();
+    pub(super) fn workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let repo = self.repository.as_ref().unwrap().clone();
         let left = v_flex()
             .track_focus(&self.changes_focus)
             .size_full()
@@ -753,7 +752,7 @@ impl GitPanel {
                     .into_any_element()
             });
         let graph = self.config.history_display.graph;
-        let query_empty = self.history_search.read(cx).value().is_empty();
+        let query_empty = self.history_search.read(cx).text().len() == 0;
         // Keep the graph mounted through its exit. A single transition drives
         // every visible row and the header, so scrolling cannot desynchronize it.
         let graph_progress = gpui_kit::base::motion::transition(
@@ -889,10 +888,20 @@ impl GitPanel {
                     cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
                         this.history_near_end = range.end.saturating_add(range.len().div_ceil(2))
                             >= this.history_indices.len();
-                        if this.history_near_end {
+                        if this.history_near_end
+                            && !this.history_load_requested
+                            && this.can_load_more_history(cx)
+                        {
+                            this.history_load_requested = true;
                             let entity = cx.entity().downgrade();
                             cx.defer(move |cx| {
-                                let _ = entity.update(cx, |this, cx| this.load_more_history(cx));
+                                let _ = entity.update(cx, |this, cx| {
+                                    if std::mem::take(&mut this.history_load_requested)
+                                        && this.history_near_end
+                                    {
+                                        this.load_more_history(cx);
+                                    }
+                                });
                             });
                         }
                         let repo = this.repository.as_ref().unwrap();

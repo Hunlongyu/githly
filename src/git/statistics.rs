@@ -88,19 +88,31 @@ impl Git {
         }
         // Bound untracked-file I/O. Large/binary/remaining files keep an explicit
         // unavailable value; their line count is never reported as zero.
-        let mut budget = 8 * 1024 * 1024_u64;
         if commit.is_none() && scope != ChangeScope::Staged {
-            for (index, file) in changes
-                .iter()
-                .filter(|file| file.status == "??")
-                .enumerate()
-            {
-                let counts = if index < 256 && budget > 0 {
-                    untracked_lines(&root.join(&file.path), &mut budget).map(|lines| (lines, 0))
-                } else {
-                    None
-                };
-                stats.insert(file.path.clone(), counts);
+            let mut files = changes.iter().filter(|file| file.status == "??");
+            let sample: Vec<_> = files
+                .by_ref()
+                .take(256)
+                .map(|file| file.path.clone())
+                .collect();
+            for file in files {
+                stats.insert(file.path.clone(), None);
+            }
+            if !sample.is_empty() {
+                let root = root.to_owned();
+                stats = blocking::unblock(move || {
+                    let mut budget = 8 * 1024 * 1024_u64;
+                    for path in sample {
+                        let counts = if budget == 0 {
+                            None
+                        } else {
+                            untracked_lines(&root.join(&path), &mut budget).map(|lines| (lines, 0))
+                        };
+                        stats.insert(path, counts);
+                    }
+                    stats
+                })
+                .await;
             }
         }
         Ok(stats)

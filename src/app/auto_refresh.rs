@@ -2,6 +2,7 @@ use super::*;
 use std::time::{Duration, Instant};
 
 const ACTIVE_INTERVAL: Duration = Duration::from_secs(3);
+const LIST_INTERVAL: Duration = Duration::from_secs(30);
 const IDLE_INTERVAL: Duration = Duration::from_secs(600);
 
 pub(super) struct RepositoryRead {
@@ -47,9 +48,8 @@ impl GitPanel {
         self.last_read = None;
         self.close_detail(cx);
         self.history_indices = Vec::new();
-        self.history_filter_task = None;
-        self.history_filter_generation = self.history_filter_generation.wrapping_add(1);
-        self.history_filtering = false;
+        self.cancel_history_filter();
+        self.file_rows = None;
         self.history_scroll = UniformListScrollHandle::new();
         self.changes_scroll = Default::default();
         self.branch_picker.update(cx, |picker, cx| picker.clear(cx));
@@ -67,6 +67,7 @@ impl GitPanel {
             .as_ref()
             .map_or_else(|| executor.now(), |read| read.finished_at);
         let mut interval_start = last_success;
+        let mut last_list_read = last_success;
         let (wake, changes) = async_channel::bounded(1);
         let task = cx.spawn(async move |this, cx| {
             let mut was_active = false;
@@ -127,10 +128,12 @@ impl GitPanel {
                 let baseline_history = previous.commits.clone();
                 // One task owns both timer and query. No tick queue, overlap,
                 // watcher thread, or accumulating snapshot cache.
+                let refresh_lists = executor.now().duration_since(last_list_read) >= LIST_INTERVAL;
                 let result = executor
-                    .spawn(
-                        async move { git.refresh(&previous, update_history, initial_limit).await },
-                    )
+                    .spawn(async move {
+                        git.refresh(&previous, update_history, refresh_lists, initial_limit)
+                            .await
+                    })
                     .await;
                 interval_start = executor.now();
                 if result.is_ok() {
@@ -155,6 +158,9 @@ impl GitPanel {
                     }
                     match result {
                         Ok(next) => {
+                            if refresh_lists {
+                                last_list_read = interval_start;
+                            }
                             let recovered = this.refresh_error.take().is_some();
                             this.record_repository_read(cx);
                             let retired = next.and_then(|repo| this.apply_refresh(repo, cx));
@@ -189,7 +195,7 @@ impl GitPanel {
     ) -> Option<Arc<Repository>> {
         let previous = self.repository.as_ref()?;
         let history_changed = !Arc::ptr_eq(&previous.commits, &next.commits);
-        let branches_changed = previous.branches != next.branches;
+        let branches_changed = !Arc::ptr_eq(&previous.branches, &next.branches);
         let offset = self.history_scroll.0.borrow().base_handle.offset();
         let top = ((-f32::from(offset.y)).max(0.) / view::HISTORY_ROW_HEIGHT).floor() as usize;
         let anchor = self

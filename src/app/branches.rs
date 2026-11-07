@@ -11,6 +11,7 @@ impl GitPanel {
         self.refresh_task = None;
         self.refresh_error = None;
         self.reset_history_reader(cx);
+        self.cancel_history_filter();
         self.project_generation = self.project_generation.wrapping_add(1);
         self.statistics_task = None;
         self.statistics_pending = false;
@@ -31,7 +32,6 @@ impl GitPanel {
                         this.history_scroll = UniformListScrollHandle::new();
                         let retired = this.repository.replace(Arc::new(repo));
                         cx.background_spawn(async move { drop(retired) }).detach();
-                        this.filter_history(cx);
                     }
                     Err(error) => this.tip(
                         "project",
@@ -39,6 +39,7 @@ impl GitPanel {
                         cx,
                     ),
                 }
+                this.filter_history(cx);
                 this.start_auto_refresh(cx);
                 this.update_statistics(true, cx);
                 cx.notify();

@@ -1,5 +1,23 @@
 # 更新日志
 
+## v0.1.3 · 2026-11-07
+
+- Linux x64 新增 AppImage 便携包，下载后赋予执行权限即可运行。应用内更新会替换原 AppImage，重启后使用新版。
+- 修复 Git 输出大量警告时读取仓库失败的问题。未跟踪文件的差异现在能正确展示空文件、特殊路径、CRLF 和缺少末尾换行的内容，并遵守 2 MiB 的差异大小上限。
+- 大型仓库滚动时复用文件列表索引，搜索和绘制提交图时减少复制。切换分支浏览范围会取消旧搜索，接近列表底部时会合并重复的分页请求。
+- 并行读取仓库和提交详情。前台仍约每 3 秒检查文件状态，约每 30 秒核对 stash 和 worktree 列表。展开 worktree 菜单时最多同时查询 4 个目录的状态。
+- 图片差异使用原生棋盘格绘制，带文字的 SVG 复用系统字体。关闭面板后更新下载可继续完成，多进程保存配置时使用独立临时文件。
+- Windows 便携 ZIP 解压后只包含 Githly.exe。发布页按系统和架构列出下载入口。
+
+**English**
+
+- Linux x64 now has a portable AppImage. Mark the downloaded file as executable to run it. In-app updates replace the original AppImage and take effect on restart.
+- Repository reads now tolerate large volumes of Git warnings. Untracked file diffs preserve empty files, quoted paths, CRLF line endings and missing final newlines, and respect the 2 MiB diff limit.
+- Scrolling reuses the file list index. Search and commit graph layout make fewer copies. Changing the history scope cancels the old search, and scrolling near the end coalesces page requests.
+- Independent repository and commit detail reads run in parallel. Foreground file status checks continue about every 3 seconds. Stash and worktree lists refresh about every 30 seconds. Opening the worktree menu checks up to four directories at a time.
+- Image diffs use native checkerboard rendering, and SVG text previews reuse system fonts. Update downloads can finish after the panel closes. Concurrent configuration saves use separate temporary files.
+- The Windows portable ZIP extracts to a single Githly.exe. Release downloads are grouped by operating system and architecture.
+
 ## v0.1.2 · 2026-11-07
 
 - 首次发布 macOS 的 Apple Silicon、Intel 两种 DMG，以及 Ubuntu 24.04 amd64 的 Debian 包。macOS 应用使用临时签名，尚未经过 Apple 公证。

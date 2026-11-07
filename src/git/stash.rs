@@ -36,25 +36,24 @@ pub(super) fn parse_stashes(bytes: &[u8]) -> Vec<Stash> {
 
 impl Git {
     pub async fn stash_detail(&self, root: &Path, id: &str) -> Result<StashDetail> {
-        let output = self
-            .run(
-                Some(root),
-                [
-                    "log",
-                    "-1",
-                    "-z",
-                    "--date=format-local:%Y-%m-%d %H:%M",
-                    "--format=%H%x00%h%x00%an%x00%ad%x00%s%x00%P%x00%D",
-                    id,
-                    "--",
-                ],
-            )
-            .await?;
+        let log = self.run(
+            Some(root),
+            [
+                "log",
+                "-1",
+                "-z",
+                "--date=format-local:%Y-%m-%d %H:%M",
+                "--format=%H%x00%h%x00%an%x00%ad%x00%s%x00%P%x00%D",
+                id,
+                "--",
+            ],
+        );
+        let (output, mut files, body) =
+            futures_util::try_join!(log, self.commit_files(root, id), self.commit_body(root, id))?;
         let commit = parse_log(&output)
             .into_iter()
             .next()
             .context(messages().stash_missing())?;
-        let mut files = self.commit_files(root, id).await?;
         let untracked_revision = commit.parents.get(2).cloned();
         let mut untracked_paths = std::collections::HashSet::new();
         if let Some(revision) = &untracked_revision {
@@ -65,7 +64,6 @@ impl Git {
                 }
             }
         }
-        let body = self.commit_body(root, id).await?;
         Ok(StashDetail {
             commit,
             files,

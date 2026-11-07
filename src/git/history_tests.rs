@@ -178,10 +178,14 @@ fn stream_crosses_batches_without_duplicates_or_graph_discontinuity() {
             assert_eq!(repo.commits[i].id, commit.id);
         }
         assert!(repo.commits.get(expected.len()).is_none());
-        let pending = git.refresh(&repo, false, 46).await.unwrap().unwrap();
+        let pending = git.refresh(&repo, false, true, 46).await.unwrap().unwrap();
         assert!(pending.history_pending);
         assert!(Arc::ptr_eq(&pending.commits, &repo.commits));
-        let latest = git.refresh(&pending, true, 46).await.unwrap().unwrap();
+        let latest = git
+            .refresh(&pending, true, true, 46)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(latest.commits[0].subject, "external commit");
         assert!(!latest.history_pending);
     });
@@ -193,23 +197,33 @@ fn refresh_reuses_history_for_file_changes_and_detects_refs_and_stash() {
     futures_lite::future::block_on(async {
         let root = directory.path();
         let repo = git.open(root, 46).await.unwrap();
-        assert!(git.refresh(&repo, true, 46).await.unwrap().is_none());
+        assert!(git.refresh(&repo, true, true, 46).await.unwrap().is_none());
         std::fs::write(root.join("未跟踪.txt"), "hello").unwrap();
-        let changed = git.refresh(&repo, true, 46).await.unwrap().unwrap();
+        let changed = git.refresh(&repo, true, true, 46).await.unwrap().unwrap();
         assert!(Arc::ptr_eq(&changed.commits, &repo.commits));
         assert_eq!(changed.changes[0].path, "未跟踪.txt");
         command(&git, root, &["stash", "push", "-u", "-m", "external stash"]);
-        let stashed = git.refresh(&changed, true, 46).await.unwrap().unwrap();
+        let stashed = git
+            .refresh(&changed, true, true, 46)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(stashed.stashes.len(), 1);
         assert!(stashed.changes.is_empty());
         command(&git, root, &["tag", "v-test"]);
-        let tagged = git.refresh(&stashed, true, 46).await.unwrap().unwrap();
+        let tagged = git
+            .refresh(&stashed, true, true, 46)
+            .await
+            .unwrap()
+            .unwrap();
         assert!(
             tagged.commits[0]
                 .references
                 .iter()
                 .any(|r| r.contains("v-test"))
         );
+        assert!(Arc::ptr_eq(&tagged.changes, &stashed.changes));
+        assert!(Arc::ptr_eq(&tagged.branches, &stashed.branches));
         let weak = Arc::downgrade(&tagged.commits);
         drop(tagged);
         assert!(weak.upgrade().is_none());
@@ -487,12 +501,26 @@ fn worktree_visibility_refreshes_without_branch_changes() {
             root,
             &["worktree", "add", "--detach", path.to_str().unwrap()],
         );
-        let multiple = git.refresh(&initial, true, 46).await.unwrap().unwrap();
+        assert!(
+            git.refresh(&initial, true, false, 46)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let multiple = git
+            .refresh(&initial, true, true, 46)
+            .await
+            .unwrap()
+            .unwrap();
         assert!(multiple.has_other_worktrees);
         assert!(git.open(&path, 46).await.unwrap().has_other_worktrees);
 
         command(&git, root, &["worktree", "remove", path.to_str().unwrap()]);
-        let single = git.refresh(&multiple, true, 46).await.unwrap().unwrap();
+        let single = git
+            .refresh(&multiple, true, true, 46)
+            .await
+            .unwrap()
+            .unwrap();
         assert!(!single.has_other_worktrees);
     });
 }

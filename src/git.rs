@@ -8,6 +8,7 @@ use std::{
     time::Duration,
 };
 
+const DIFF_LIMIT: usize = 2 * 1024 * 1024;
 pub const IMAGE_FILE_LIMIT: u64 = 8 * 1024 * 1024;
 mod history;
 pub use history::{History, HistoryStream};
@@ -16,6 +17,7 @@ mod status;
 pub use stash::{Stash, StashDetail};
 mod statistics;
 pub use statistics::LineStatistics;
+mod untracked;
 mod worktrees;
 pub use worktrees::Worktree;
 #[cfg(test)]
@@ -55,9 +57,11 @@ pub struct Repository {
     pub branch: String,
     pub head: Option<String>,
     pub tracking: Option<BranchTracking>,
-    pub changes: Vec<ChangedFile>,
+    pub changes: Arc<[ChangedFile]>,
+    changes_digest: [u8; 32],
+    refs_digest: [u8; 32],
     pub commits: Arc<History<Commit>>,
-    pub stashes: Vec<Stash>,
+    pub stashes: Arc<[Stash]>,
     pub branches: Arc<[Branch]>,
     pub graph: Arc<History<crate::graph::GraphRow>>,
     pub graph_width: usize,
@@ -214,11 +218,9 @@ impl Git {
         let stderr = child.stderr.take().context(messages().read_git_stderr())?;
         let (status, stdout, stderr) = futures_lite::future::race(
             async {
-                let (stdout, stderr) = futures_lite::future::try_zip(
-                    read_stdout(stdout),
-                    read_limited(stderr, 64 * 1024),
-                )
-                .await?;
+                let (stdout, stderr) =
+                    futures_lite::future::try_zip(read_stdout(stdout), drain_capped(stderr))
+                        .await?;
                 Ok((child.status().await?, stdout, stderr))
             },
             async {
@@ -239,7 +241,8 @@ impl Git {
             .await
             .context(messages().invalid_repository())?;
         let root = PathBuf::from(String::from_utf8_lossy(&root).trim());
-        self.read_repository(root, None, true, initial_limit).await
+        self.read_repository(root, None, true, true, initial_limit)
+            .await
     }
 
     /// Called by the single background polling task. Unchanged history shares
@@ -248,6 +251,7 @@ impl Git {
         &self,
         previous: &Repository,
         update_history: bool,
+        refresh_lists: bool,
         initial_limit: usize,
     ) -> Result<Option<Repository>> {
         let next = self
@@ -255,10 +259,24 @@ impl Git {
                 previous.root.clone(),
                 Some(previous),
                 update_history,
+                refresh_lists,
                 initial_limit,
             )
             .await?;
-        Ok((next != *previous).then_some(next))
+        // History, graph and continuation state are replaced together. A reused
+        // commit allocation represents the entire unchanged history.
+        let changed = !Arc::ptr_eq(&next.commits, &previous.commits)
+            || next.history_pending != previous.history_pending
+            || next.changes_digest != previous.changes_digest
+            || next.refs_digest != previous.refs_digest
+            || next.head != previous.head
+            || next.branch != previous.branch
+            || next.tracking != previous.tracking
+            || next.operation_states != previous.operation_states
+            || !Arc::ptr_eq(&next.stashes, &previous.stashes)
+            || next.has_other_worktrees != previous.has_other_worktrees
+            || next.worktree_error != previous.worktree_error;
+        Ok(changed.then_some(next))
     }
 
     pub async fn browse(
@@ -270,8 +288,14 @@ impl Git {
         let mut previous = previous.clone();
         previous.history_scope = scope;
         previous.history_key.clear();
-        self.read_repository(previous.root.clone(), Some(&previous), true, initial_limit)
-            .await
+        self.read_repository(
+            previous.root.clone(),
+            Some(&previous),
+            true,
+            true,
+            initial_limit,
+        )
+        .await
     }
 
     pub async fn switch_branch(&self, root: &Path, name: &str) -> Result<()> {
@@ -348,47 +372,93 @@ impl Git {
         root: PathBuf,
         previous: Option<&Repository>,
         update_history: bool,
+        refresh_lists: bool,
         initial_limit: usize,
     ) -> Result<Repository> {
-        let git_dir = if let Some(previous) = previous {
-            previous.git_dir.clone()
-        } else {
-            self.git_dir(&root).await?
+        let git_dir = async {
+            match previous {
+                Some(repo) => Ok(repo.git_dir.clone()),
+                None => self.git_dir(&root).await,
+            }
         };
-        let status = self
-            .run(
-                Some(&root),
-                [
-                    "status",
-                    "--porcelain=v2",
-                    "--branch",
-                    "--ahead-behind",
-                    "-z",
-                    "--untracked-files=all",
-                ],
-            )
-            .await?;
+        let status = self.run(
+            Some(&root),
+            [
+                "status",
+                "--porcelain=v2",
+                "--branch",
+                "--ahead-behind",
+                "-z",
+                "--untracked-files=all",
+            ],
+        );
+        let refs = self.run_with_stdout(
+            Some(&root),
+            [
+                "for-each-ref",
+                "--format=%(refname)%00%(symref)%00%(HEAD)%00%(objectname)",
+                "refs/heads",
+                "refs/remotes",
+                "refs/tags",
+            ],
+            read_refs,
+        );
+        let lists = async {
+            if let Some(repo) = previous.filter(|_| !refresh_lists) {
+                return anyhow::Ok((
+                    repo.stashes.clone(),
+                    repo.has_other_worktrees,
+                    repo.worktree_error.clone(),
+                ));
+            }
+            let stashes = async {
+                let output = self
+                    .run(
+                        Some(&root),
+                        [
+                            "stash",
+                            "list",
+                            "-z",
+                            "--date=format-local:%Y-%m-%d %H:%M",
+                            "--format=%H%x00%cd%x00%s",
+                        ],
+                    )
+                    .await?;
+                let parsed = stash::parse_stashes(&output);
+                anyhow::Ok(
+                    previous
+                        .filter(|repo| *repo.stashes == parsed)
+                        .map_or_else(|| parsed.into(), |repo| repo.stashes.clone()),
+                )
+            };
+            let worktrees = async {
+                match self.worktree_entries(&root).await {
+                    Ok(entries) => (
+                        entries
+                            .iter()
+                            .filter(|entry| entry.available)
+                            .nth(1)
+                            .is_some(),
+                        None,
+                    ),
+                    Err(error) => (
+                        previous.is_some_and(|repo| repo.has_other_worktrees),
+                        Some(format!("{error:#}")),
+                    ),
+                }
+            };
+            let (stashes, (multiple, error)) = futures_lite::future::zip(stashes, worktrees).await;
+            Ok((stashes?, multiple, error))
+        };
+        let (git_dir, status, (refs, refs_digest), (stashes, has_other_worktrees, worktree_error)) =
+            futures_util::try_join!(git_dir, status, refs, lists)?;
         let status::Status {
             head,
             branch,
             tracking,
             changes,
-        } = status::parse(&status)?;
-        // status distinguishes an unborn branch from a failed Git query.
-        // Include tags and object IDs so external ref moves invalidate decorations.
-        let (refs, refs_digest) = self
-            .run_with_stdout(
-                Some(&root),
-                [
-                    "for-each-ref",
-                    "--format=%(refname)%00%(symref)%00%(HEAD)%00%(objectname)",
-                    "refs/heads",
-                    "refs/remotes",
-                    "refs/tags",
-                ],
-                read_refs,
-            )
-            .await?;
+            changes_digest,
+        } = status::parse(&status, previous)?;
         let history_scope = previous
             .map(|repo| repo.history_scope.clone())
             .unwrap_or_default();
@@ -458,19 +528,21 @@ impl Git {
         } else {
             Arc::new(History::new(Vec::new()))
         };
-        let stashes = self
-            .run(
-                Some(&root),
-                [
-                    "stash",
-                    "list",
-                    "-z",
-                    "--date=format-local:%Y-%m-%d %H:%M",
-                    "--format=%H%x00%cd%x00%s",
-                ],
-            )
-            .await?;
-        let branches: Arc<[Branch]> = parse_branches(&refs).into();
+
+        let branches = previous
+            .filter(|repo| repo.refs_digest == refs_digest)
+            .map_or_else(
+                || {
+                    let parsed = parse_branches(&refs);
+                    previous
+                        .filter(|repo| *repo.branches == parsed)
+                        .map_or_else(
+                            || Arc::<[Branch]>::from(parsed),
+                            |repo| repo.branches.clone(),
+                        )
+                },
+                |repo| repo.branches.clone(),
+            );
         let branch = if branch == "(detached)"
             && head.is_some()
             && !branches.iter().any(|branch| branch.current)
@@ -504,20 +576,7 @@ impl Git {
         if conflicts > 0 {
             operation_states.push(messages().conflicts(conflicts));
         }
-        let (has_other_worktrees, worktree_error) = match self.worktree_entries(&root).await {
-            Ok(entries) => (
-                entries
-                    .iter()
-                    .filter(|entry| entry.available)
-                    .nth(1)
-                    .is_some(),
-                None,
-            ),
-            Err(error) => (
-                previous.is_some_and(|repo| repo.has_other_worktrees),
-                Some(format!("{error:#}")),
-            ),
-        };
+
         Ok(Repository {
             root,
             has_other_worktrees,
@@ -528,9 +587,11 @@ impl Git {
             tracking,
             branch,
             changes,
+            changes_digest,
+            refs_digest,
             graph,
             commits,
-            stashes: stash::parse_stashes(&stashes),
+            stashes,
             branches,
             history_key,
             history_complete,
@@ -645,27 +706,30 @@ impl Git {
                 .await
                 .map(Some)
         } else {
-            use std::io::Read;
             let path = root.join(path);
-            let metadata = match std::fs::symlink_metadata(&path) {
-                Ok(metadata) => metadata,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-                Err(error) => return Err(error).context(messages().read_image()),
-            };
-            anyhow::ensure!(metadata.is_file(), messages().invalid_image_path());
-            anyhow::ensure!(
-                metadata.len() <= IMAGE_FILE_LIMIT,
-                messages().image_too_large()
-            );
-            let mut bytes = Vec::new();
-            std::fs::File::open(path)?
-                .take(IMAGE_FILE_LIMIT + 1)
-                .read_to_end(&mut bytes)?;
-            anyhow::ensure!(
-                bytes.len() as u64 <= IMAGE_FILE_LIMIT,
-                messages().image_too_large()
-            );
-            Ok(Some(bytes))
+            blocking::unblock(move || {
+                use std::io::Read;
+                let metadata = match std::fs::symlink_metadata(&path) {
+                    Ok(metadata) => metadata,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                    Err(error) => return Err(error).context(messages().read_image()),
+                };
+                anyhow::ensure!(metadata.is_file(), messages().invalid_image_path());
+                anyhow::ensure!(
+                    metadata.len() <= IMAGE_FILE_LIMIT,
+                    messages().image_too_large()
+                );
+                let mut bytes = Vec::new();
+                std::fs::File::open(path)?
+                    .take(IMAGE_FILE_LIMIT + 1)
+                    .read_to_end(&mut bytes)?;
+                anyhow::ensure!(
+                    bytes.len() as u64 <= IMAGE_FILE_LIMIT,
+                    messages().image_too_large()
+                );
+                Ok(Some(bytes))
+            })
+            .await
         }
     }
 
@@ -702,19 +766,9 @@ impl Git {
             )
             .await?
         } else if file.status == "??" {
-            let path = root.join(&file.path);
-            let metadata = std::fs::metadata(&path)?;
-            anyhow::ensure!(metadata.len() <= 1024 * 1024, messages().file_too_large());
-            let text = std::fs::read_to_string(&path).context(messages().non_text())?;
-            let count = text.lines().count();
-            return Ok(format!(
-                "diff --git a/{0} b/{0}\nnew file mode 100644\n--- /dev/null\n+++ b/{0}\n@@ -0,0 +1,{1} @@\n{2}",
-                file.path,
-                count,
-                text.lines()
-                    .map(|line| format!("+{line}\n"))
-                    .collect::<String>()
-            ));
+            let root = root.to_owned();
+            let name = file.path.clone();
+            return blocking::unblock(move || untracked::patch(&root, &name)).await;
         } else {
             let mut args: Vec<OsString> =
                 ["diff", "--no-ext-diff", "--no-textconv", "--no-renames"]
@@ -742,7 +796,7 @@ impl Git {
             }
             self.run(Some(root), args).await?
         };
-        anyhow::ensure!(output.len() <= 2 * 1024 * 1024, messages().diff_too_large());
+        anyhow::ensure!(output.len() <= DIFF_LIMIT, messages().diff_too_large());
         Ok(String::from_utf8_lossy(&output).into())
     }
 
@@ -1270,6 +1324,39 @@ mod tests {
             futures_lite::future::block_on(Git::detect(Some(directory.path().join("git.exe"))))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn git_drains_large_diagnostics_and_preserves_exit_status() {
+        futures_lite::future::block_on(async {
+            let git = Git::detect(None).await.unwrap();
+            let root = tempfile::tempdir().unwrap();
+            let output = git
+                .run(
+                    Some(root.path()),
+                    [
+                        "-c",
+                        "alias.noisy=!printf '%070000d' 0 >&2 && printf ok",
+                        "noisy",
+                    ],
+                )
+                .await
+                .unwrap();
+            assert_eq!(output, b"ok");
+            let error = git
+                .run(
+                    Some(root.path()),
+                    [
+                        "-c",
+                        "alias.noisy=!printf '%070000d' 0 >&2 && exit 2",
+                        "noisy",
+                    ],
+                )
+                .await
+                .unwrap_err()
+                .to_string();
+            assert_eq!(error, "0".repeat(64 * 1024));
+        });
     }
 
     #[test]
