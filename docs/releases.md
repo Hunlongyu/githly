@@ -21,7 +21,7 @@ cargo build --release --locked
 - `update.json`：版本、版本说明地址、安装包地址 / 字节数 / SHA-256。
 - `SHA256SUMS.txt`：以上文件的校验值。
 
-确认版本和产物后，由维护者提交变更并推送对应版本标签。工作流上传附件并生成 Release 说明。本轮仅提供配置与实现，没有代替维护者推送标签或发布版本。
+确认版本和产物后，由维护者提交变更并推送对应版本标签。工作流使用 CHANGELOG.md 中对应版本的条目生成 Release 说明，并附上该标签的安装包和便携包下载入口。
 
 安装包最低 Windows 10，按用户安装到 `%LOCALAPPDATA%/Programs/Githly`，不要求管理员权限。升级关闭占用文件的应用前使用正常安装向导，不强行终止；完成后可启动新版。用户配置保留在 `%APPDATA%/githly`，卸载也不删除配置。便携版的更新按钮同样打开安装向导，不原地静默替换任意目录中的 EXE。
 
@@ -44,8 +44,8 @@ cargo build --release --locked
 
 ## 当前验收边界
 
-本机 Release 构建、Inno Setup 6.7.4 编译、ZIP 打包及清单 / 文件摘要核对已通过，错误标签也会被拒绝。自动化测试覆盖新旧版本判断、限流冷却、镜像切换 / 滞后 / 失败、下载截断 / 中断 / 校验失败及安装程序无法启动。尚无正式版本可做端到端升级验收，干净 Windows 安装 / 跨版本升级 / 卸载及真实安装失败恢复仍列在 TODO。
+本机 Release 构建、Inno Setup 6.7.4 编译、ZIP 打包及清单 / 文件摘要核对已通过，错误标签也会被拒绝。自动化测试覆盖新旧版本判断、限流冷却、镜像切换 / 滞后 / 失败、下载截断 / 中断 / 校验失败及安装程序无法启动。干净 Windows 安装、跨版本升级、卸载及真实安装失败恢复仍待验收。
 
-没有代码签名证书，也没有独立签名的更新清单。SHA-256 只能证明安装包与清单一致，无法抵御清单和安装包同时被替换；应只配置自己信任的镜像。公共镜像服务与清单签名方案留待正式发布前确定。
+没有代码签名证书，也没有独立签名的更新清单。SHA-256 只能证明安装包与清单一致，无法抵御清单和安装包同时被替换；应只配置自己信任的镜像。公共镜像服务与清单签名方案仍待确定。
 
 实现依据：[GitHub 限流规则](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api)、[WinHTTP 重定向选项](https://learn.microsoft.com/en-us/windows/win32/winhttp/option-flags)、[Inno Setup 官方下载](https://jrsoftware.org/isdl.php)及[安装命令行参数](https://jrsoftware.org/ishelp/topic_setupcmdline.htm)。

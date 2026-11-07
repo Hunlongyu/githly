@@ -32,7 +32,7 @@ jobs:
       - name: Format
         run: cargo fmt --all -- --check
       - name: Tests
-        run: cargo test --locked --features ui-tests
+        run: cargo test --locked --features ui-tests -- --test-threads=1
       - name: Clippy
         run: cargo clippy --locked --all-targets --features ui-tests -- -D warnings
       - name: Release build
@@ -56,6 +56,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
           name: windows-x64
@@ -68,6 +71,22 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           if ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+$') { throw 'Only stable vX.Y.Z tags are supported.' }
+          $sections = (Get-Content -LiteralPath CHANGELOG.md -Raw -Encoding utf8) -split '(?m)^## '
+          $notes = @($sections | Where-Object { $_.StartsWith("$env:RELEASE_TAG · ") })
+          if ($notes.Count -ne 1) { throw "Expected one changelog entry for $env:RELEASE_TAG." }
+          $body = ($notes[0] -split '\n', 2)[1].Trim()
+          $version = $env:RELEASE_TAG.Substring(1)
+          $setup = Get-Item -LiteralPath "release/Githly-$version-windows-x64-setup.exe"
+          $portable = Get-Item -LiteralPath "release/Githly-$version-windows-x64.zip"
+          $url = "https://github.com/$env:GH_REPO/releases/download/$env:RELEASE_TAG"
+          $table = @(
+            '## 下载'
+            ''
+            '| 系统 | 下载 |'
+            '| --- | --- |'
+            "| Windows 10/11 | [![Setup x64](https://img.shields.io/badge/Setup-x64-2d7d9a?style=flat-square)]($url/$($setup.Name))<br>[![Portable x64](https://img.shields.io/badge/Portable-x64-67b7d1?style=flat-square)]($url/$($portable.Name)) |"
+          )
+          ((@($body, '') + $table) -join "`n") | Set-Content -LiteralPath release-notes.md -Encoding utf8NoBOM
           $artifacts = Get-ChildItem -LiteralPath release -File | ForEach-Object FullName
-          gh release create $env:RELEASE_TAG @artifacts --repo $env:GH_REPO --verify-tag --generate-notes --latest
+          gh release create $env:RELEASE_TAG @artifacts --repo $env:GH_REPO --verify-tag --title "Githly $env:RELEASE_TAG" --notes-file release-notes.md --latest
           if ($LASTEXITCODE -ne 0) { throw 'GitHub Release publish failed.' }
