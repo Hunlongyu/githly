@@ -653,28 +653,6 @@ impl GitPanel {
                     Some(format!("+{} −{}{note}", stats.added, stats.removed))
                 };
                 view.child(
-                    div().px_2().pt_1().child(
-                        controls::segmented("change-scope")
-                            .selected_index(match self.change_scope {
-                                ChangeScope::All => 0,
-                                ChangeScope::Working => 1,
-                                ChangeScope::Staged => 2,
-                            })
-                            .child(Tab::new().label(messages().all()))
-                            .child(Tab::new().label(messages().unstaged()))
-                            .child(Tab::new().label(messages().staged()))
-                            .on_click(cx.listener(|this, index: &usize, _, cx| {
-                                this.change_scope = match index {
-                                    1 => ChangeScope::Working,
-                                    2 => ChangeScope::Staged,
-                                    _ => ChangeScope::All,
-                                };
-                                this.update_statistics(true, cx);
-                                cx.notify();
-                            })),
-                    ),
-                )
-                .child(
                     div()
                         .px(px(8.))
                         .py(px(6.))
@@ -767,6 +745,22 @@ impl GitPanel {
             });
         let graph = self.config.history_display.graph;
         let query_empty = self.history_search.read(cx).text().len() == 0;
+        let history_summary = if self.history_filtering {
+            messages().searching().to_owned()
+        } else {
+            let status = if self.history_loading {
+                messages().loading()
+            } else if repo.history_pending {
+                messages().new_history()
+            } else if repo.history_complete {
+                messages().end_of_history()
+            } else if !query_empty {
+                messages().search_loaded()
+            } else {
+                ""
+            };
+            messages().shown_commits(self.history_indices.len(), status)
+        };
         // Keep the graph mounted through its exit. A single transition drives
         // every visible row and the header, so scrolling cannot desynchronize it.
         let graph_progress = gpui_kit::base::motion::transition(
@@ -829,22 +823,7 @@ impl GitPanel {
                         div()
                             .text_size(px(11.))
                             .text_color(cx.theme().muted_foreground)
-                            .child(messages().loaded_count(
-                                repo.commits.len(),
-                                if self.history_filtering {
-                                    messages().searching()
-                                } else if self.history_loading {
-                                    messages().loading()
-                                } else if repo.history_pending {
-                                    messages().new_history()
-                                } else if repo.history_complete {
-                                    messages().end_of_history()
-                                } else if !query_empty {
-                                    messages().search_loaded()
-                                } else {
-                                    messages().scroll_for_more()
-                                },
-                            )),
+                            .child(history_summary),
                     )
                     .child(div().flex_1())
                     .child(
@@ -1031,7 +1010,7 @@ impl GitPanel {
                         .unwrap_or(messages().empty_tree()),
                 )
             })
-            .unwrap_or_else(|| messages().snapshot(self.detail_change_scope.label()));
+            .unwrap_or_else(|| messages().worktree_snapshot().to_owned());
         let detail = v_flex()
             .size_full()
             .min_h_0()

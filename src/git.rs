@@ -119,34 +119,6 @@ pub enum HistoryScope {
     All,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum ChangeScope {
-    #[default]
-    All,
-    Staged,
-    Working,
-}
-impl ChangeScope {
-    pub fn includes(self, file: &ChangedFile) -> bool {
-        match self {
-            Self::All => true,
-            Self::Staged => {
-                file.status != "??" && file.status.as_bytes().first().is_some_and(|b| *b != b' ')
-            }
-            Self::Working => {
-                file.status == "??" || file.status.as_bytes().get(1).is_some_and(|b| *b != b' ')
-            }
-        }
-    }
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::All => messages().head_to_worktree(),
-            Self::Staged => messages().head_to_index(),
-            Self::Working => messages().index_to_worktree(),
-        }
-    }
-}
-
 impl HistoryScope {
     pub fn label(&self) -> &str {
         match self {
@@ -813,16 +785,6 @@ impl Git {
         commit: Option<&str>,
         file: &ChangedFile,
     ) -> Result<String> {
-        self.diff_scoped(root, commit, file, ChangeScope::All).await
-    }
-
-    pub async fn diff_scoped(
-        &self,
-        root: &Path,
-        commit: Option<&str>,
-        file: &ChangedFile,
-        scope: ChangeScope,
-    ) -> Result<String> {
         let output = if let Some(id) = commit {
             self.run(
                 Some(root),
@@ -857,20 +819,7 @@ impl Git {
             .into_iter()
             .map(OsString::from)
             .collect();
-            match scope {
-                ChangeScope::Staged => args.push("--cached".into()),
-                ChangeScope::Working => {}
-                ChangeScope::All => {
-                    let head = self
-                        .run(Some(root), ["rev-parse", "--verify", "HEAD"])
-                        .await;
-                    if let Ok(head) = head {
-                        args.push(String::from_utf8_lossy(&head).trim().into());
-                    } else {
-                        args.push(self.empty_tree(root).await?.into());
-                    }
-                }
-            }
+            args.push(self.head_or_empty_tree(root).await?.into());
             args.push("--".into());
             args.push(file.path.to_os_str()?.to_owned());
             if let Some(original) = &file.original_path {
@@ -885,7 +834,13 @@ impl Git {
         Ok(String::from_utf8_lossy(&output).into())
     }
 
-    async fn empty_tree(&self, root: &Path) -> Result<String> {
+    async fn head_or_empty_tree(&self, root: &Path) -> Result<String> {
+        if let Ok(head) = self
+            .run(Some(root), ["rev-parse", "--verify", "HEAD"])
+            .await
+        {
+            return Ok(String::from_utf8_lossy(&head).trim().into());
+        }
         let output = self
             .run(Some(root), ["hash-object", "-t", "tree", "--stdin"])
             .await?;

@@ -28,10 +28,7 @@ fn non_utf8_git_paths_stay_distinct_in_history_statistics_and_diff_labels() {
     );
     futures_lite::future::block_on(async {
         let files = git.commit_files(root, "HEAD").await.unwrap();
-        let stats = git
-            .line_statistics(root, Some("HEAD"), ChangeScope::All, &[])
-            .await
-            .unwrap();
+        let stats = git.line_statistics(root, Some("HEAD"), &[]).await.unwrap();
         assert_eq!(files.len(), 2);
         assert_eq!(files[0].path.as_slice(), b"a\xfe");
         assert_eq!(files[1].path.as_slice(), b"a\xff");
@@ -438,13 +435,9 @@ fn untracked_statistics_bound_metadata_checks_as_well_as_reads() {
             status: "??".into(),
         })
         .collect();
-    let stats = futures_lite::future::block_on(git.line_statistics(
-        directory.path(),
-        None,
-        ChangeScope::Working,
-        &changes,
-    ))
-    .unwrap();
+    let stats =
+        futures_lite::future::block_on(git.line_statistics(directory.path(), None, &changes))
+            .unwrap();
     assert!(stats.incomplete && stats.files["last.txt".as_bytes()].is_none());
 }
 
@@ -493,7 +486,7 @@ fn stash_details_bind_object_and_include_untracked_versions() {
 }
 
 #[test]
-fn staged_and_working_changes_keep_distinct_text_and_image_versions() {
+fn working_tree_diff_keeps_dual_status_files_even_with_zero_net_changes() {
     let (directory, git) = fixture(2);
     futures_lite::future::block_on(async {
         let root = directory.path();
@@ -512,21 +505,8 @@ fn staged_and_working_changes_keep_distinct_text_and_image_versions() {
             .iter()
             .find(|file| file.path == "file.txt")
             .unwrap();
-        assert!(ChangeScope::Staged.includes(file) && ChangeScope::Working.includes(file));
-        let staged = git
-            .diff_scoped(root, None, file, ChangeScope::Staged)
-            .await
-            .unwrap();
-        let working = git
-            .diff_scoped(root, None, file, ChangeScope::Working)
-            .await
-            .unwrap();
-        let all = git
-            .diff_scoped(root, None, file, ChangeScope::All)
-            .await
-            .unwrap();
-        assert!(staged.contains("-base") && staged.contains("+index"));
-        assert!(working.contains("-index") && working.contains("+base"));
+        assert_eq!(file.status, "MM");
+        let all = git.diff(root, None, file).await.unwrap();
         assert!(
             all.is_empty(),
             "net zero does not remove dual-state file record"
@@ -551,7 +531,7 @@ fn staged_and_working_changes_keep_distinct_text_and_image_versions() {
         command(&git, empty.path(), &["add", "."]);
         let unborn = git.open(empty.path(), 46).await.unwrap();
         let diff = git
-            .diff_scoped(empty.path(), None, &unborn.changes[0], ChangeScope::All)
+            .diff(empty.path(), None, &unborn.changes[0])
             .await
             .unwrap();
         assert!(diff.contains("+new"));
@@ -571,7 +551,7 @@ fn asynchronous_statistics_distinguish_text_binary_and_untracked() {
         std::fs::write(root.join("new.txt"), "new\nlines\n").unwrap();
         let repo = git.open(root, 46).await.unwrap();
         let stats = git
-            .line_statistics(root, None, ChangeScope::All, &repo.changes)
+            .line_statistics(root, None, &repo.changes)
             .await
             .unwrap();
         assert_eq!(stats.files["file.txt".as_bytes()], Some((2, 1)));
@@ -580,11 +560,11 @@ fn asynchronous_statistics_distinguish_text_binary_and_untracked() {
         assert_eq!((stats.added, stats.removed, stats.incomplete), (4, 1, true));
         command(&git, root, &["add", "file.txt"]);
         let stats = git
-            .line_statistics(root, None, ChangeScope::Staged, &repo.changes)
+            .line_statistics(root, None, &repo.changes)
             .await
             .unwrap();
-        assert_eq!(stats.files.len(), 1);
-        assert_eq!((stats.added, stats.removed), (2, 1));
+        assert_eq!(stats.files.len(), 3);
+        assert_eq!((stats.added, stats.removed), (4, 1));
     });
 }
 

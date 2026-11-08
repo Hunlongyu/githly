@@ -1,5 +1,5 @@
 use super::{Context, GitPanel};
-use crate::git::{ChangeScope, ChangedFile};
+use crate::git::ChangedFile;
 use std::sync::Arc;
 
 pub(super) struct FileRows {
@@ -7,7 +7,6 @@ pub(super) struct FileRows {
     pub indices: Vec<usize>,
     pub counts: [usize; 2],
     pub header_row: usize,
-    scope: ChangeScope,
     collapsed: [bool; 2],
 }
 
@@ -18,16 +17,14 @@ impl GitPanel {
         cx: &Context<Self>,
     ) -> Arc<FileRows> {
         let collapsed = self.collapsed_change_groups;
-        let scope = self.change_scope;
         if let Some(rows) = &self.file_rows
             && Arc::ptr_eq(files, &rows.files)
-            && rows.scope == scope
             && rows.collapsed == collapsed
         {
             return rows.clone();
         }
         let [mut indices, untracked] =
-            grouped_file_indices(files, &self.file_search.read(cx).value(), scope);
+            grouped_file_indices(files, &self.file_search.read(cx).value());
         let counts = [indices.len(), untracked.len()];
         if collapsed[0] {
             indices.clear();
@@ -41,7 +38,6 @@ impl GitPanel {
             indices,
             counts,
             header_row,
-            scope,
             collapsed,
         });
         self.file_rows = Some(rows.clone());
@@ -49,17 +45,11 @@ impl GitPanel {
     }
 }
 
-pub(super) fn grouped_file_indices(
-    files: &[ChangedFile],
-    query: &str,
-    scope: ChangeScope,
-) -> [Vec<usize>; 2] {
+pub(super) fn grouped_file_indices(files: &[ChangedFile], query: &str) -> [Vec<usize>; 2] {
     let query = query.to_lowercase();
     let mut groups = [Vec::new(), Vec::new()];
     for (index, file) in files.iter().enumerate() {
-        if scope.includes(file)
-            && (query.is_empty() || super::matches_query(&file.display_path(), &query))
-        {
+        if query.is_empty() || super::matches_query(&file.display_path(), &query) {
             groups[usize::from(file.status == "??")].push(index);
         }
     }
@@ -107,15 +97,12 @@ mod tests {
             },
         ];
         assert_eq!(
-            grouped_file_indices(&files, "readme", ChangeScope::All),
+            grouped_file_indices(&files, "readme"),
             [vec![2], vec![0, 3]]
         );
-        assert_eq!(
-            grouped_file_indices(&files, "readme", ChangeScope::Staged),
-            [vec![2], vec![]]
-        );
+        assert_eq!(grouped_file_indices(&files, ""), [vec![1, 2], vec![0, 3]]);
         assert!(
-            grouped_file_indices(&files, "absent", ChangeScope::All)
+            grouped_file_indices(&files, "absent")
                 .iter()
                 .all(Vec::is_empty)
         );

@@ -292,6 +292,20 @@ impl GitPanel {
 }
 
 fn about_page(cx: &App) -> AnyElement {
+    let links = [
+        (
+            "about-repository",
+            messages().repository_link(),
+            "Hunlongyu/githly",
+            env!("CARGO_PKG_REPOSITORY"),
+        ),
+        (
+            "about-feedback",
+            messages().feedback(),
+            "GitHub Issues",
+            concat!(env!("CARGO_PKG_REPOSITORY"), "/issues"),
+        ),
+    ];
     v_flex()
         .gap(px(22.))
         .child(
@@ -335,27 +349,23 @@ fn about_page(cx: &App) -> AnyElement {
                         )
                         .child(env!("CARGO_PKG_AUTHORS")),
                 )
-                .child(
+                .children(links.into_iter().map(|(id, heading, label, url)| {
                     h_flex()
                         .px_3()
                         .h(px(44.))
                         .justify_between()
                         .border_t_1()
                         .border_color(cx.theme().border)
+                        .child(div().text_color(cx.theme().muted_foreground).child(heading))
                         .child(
-                            div()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(messages().repository_link()),
-                        )
-                        .child(
-                            controls::button("about-repository")
+                            controls::button(id)
                                 .link()
                                 .icon(IconName::ExternalLink)
-                                .label("Hunlongyu/githly")
-                                .tooltip(env!("CARGO_PKG_REPOSITORY"))
-                                .on_click(|_, _, cx| cx.open_url(env!("CARGO_PKG_REPOSITORY"))),
-                        ),
-                ),
+                                .label(label)
+                                .tooltip(url)
+                                .on_click(move |_, _, cx| cx.open_url(url)),
+                        )
+                })),
         )
         .into_any_element()
 }
@@ -449,6 +459,15 @@ mod tests {
             );
             assert!(window.find("about-repository").visible());
             window.click("about-repository", cx);
+        })
+        .unwrap();
+        assert_eq!(
+            cx.opened_url().as_deref(),
+            Some("https://github.com/Hunlongyu/githly")
+        );
+        cx.update_window(window, |_, window, cx| {
+            assert!(window.find("about-feedback").visible());
+            window.click("about-feedback", cx);
             window.click("settings-general", cx);
             assert!(window.try_find("about-version").is_none());
             assert!(window.within("settings-motion").find(0_usize).visible());
@@ -458,7 +477,7 @@ mod tests {
         cx.run_until_parked();
         assert_eq!(
             cx.opened_url().as_deref(),
-            Some("https://github.com/Hunlongyu/githly")
+            Some("https://github.com/Hunlongyu/githly/issues")
         );
         assert_eq!(store.load().unwrap().language, Language::English);
     }

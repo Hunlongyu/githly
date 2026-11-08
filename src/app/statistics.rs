@@ -18,16 +18,14 @@ impl GitPanel {
         self.statistics_generation = self.statistics_generation.wrapping_add(1);
         let generation = self.statistics_generation;
         let project = self.project_generation;
-        let scope = self.change_scope;
         self.statistics_pending = true;
         let retired = std::mem::take(&mut self.statistics);
         cx.background_spawn(async move { drop(retired) }).detach();
         self.statistics_error = None;
         self.statistics_read = Some(Instant::now());
         let task = cx.background_spawn(async move {
-            if repo.changes.iter().any(|file| scope.includes(file)) {
-                git.line_statistics(&repo.root, None, scope, &repo.changes)
-                    .await
+            if !repo.changes.is_empty() {
+                git.line_statistics(&repo.root, None, &repo.changes).await
             } else {
                 Ok(Default::default())
             }

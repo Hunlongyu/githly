@@ -1,7 +1,7 @@
 use crate::i18n::{Locale, LocalizedText, messages};
 use crate::{
     config::{Appearance, Config, ConfigStore},
-    git::{ChangeScope, ChangedFile, Commit, Git, Repository},
+    git::{ChangedFile, Commit, Git, Repository},
 };
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::{
@@ -87,8 +87,6 @@ pub struct GitPanel {
     stash_tab: bool,
     collapsed_change_groups: [bool; 2],
     file_rows: Option<Arc<file_list::FileRows>>,
-    change_scope: ChangeScope,
-    detail_change_scope: ChangeScope,
     statistics: crate::git::LineStatistics,
     statistics_pending: bool,
     statistics_error: Option<String>,
@@ -199,8 +197,6 @@ impl GitPanel {
             stash_tab: false,
             collapsed_change_groups: [false; 2],
             file_rows: None,
-            change_scope: ChangeScope::All,
-            detail_change_scope: ChangeScope::All,
             statistics: crate::git::LineStatistics::default(),
             statistics_pending: false,
             statistics_error: None,
@@ -565,7 +561,7 @@ impl GitPanel {
     }
 
     fn select_change(&mut self, index: usize, cx: &mut Context<Self>) {
-        let Some(mut file) = self
+        let Some(file) = self
             .repository
             .as_ref()
             .and_then(|repo| repo.changes.get(index))
@@ -574,10 +570,6 @@ impl GitPanel {
             return;
         };
         self.clear_detail(cx);
-        self.detail_change_scope = self.change_scope;
-        if self.change_scope == ChangeScope::Working {
-            file.original_path = None;
-        }
         self.detail_open = true;
         self.files = vec![file];
         self.select_file(0, cx);
@@ -604,16 +596,6 @@ impl GitPanel {
             id = self.stash_revision.clone();
             original_revision = None;
         }
-        let scope = self.detail_change_scope;
-        let local = self.selected_commit.is_none();
-        let mut image_modified_revision = id.clone();
-        if local {
-            match scope {
-                ChangeScope::Staged => image_modified_revision = Some(":".into()),
-                ChangeScope::Working => original_revision = Some(":".into()),
-                ChangeScope::All => {}
-            }
-        }
         let Some(git) = self.git.clone() else {
             return;
         };
@@ -634,17 +616,13 @@ impl GitPanel {
                         &git,
                         &root,
                         original_revision.as_deref(),
-                        image_modified_revision.as_deref(),
+                        id.as_deref(),
                         &file,
                     )
                     .await,
                 ));
             }
-            let patch = if local {
-                git.diff_scoped(&root, None, &file, scope).await?
-            } else {
-                git.diff(&root, id.as_deref(), &file).await?
-            };
+            let patch = git.diff(&root, id.as_deref(), &file).await?;
             diff_data::parse(&patch).map(diff_data::Content::Text)
         });
         self.diff_task = Some(cx.spawn(async move |this, cx| {

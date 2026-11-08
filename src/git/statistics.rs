@@ -26,7 +26,6 @@ impl Git {
         &self,
         root: &Path,
         commit: Option<&str>,
-        scope: ChangeScope,
         changes: &[ChangedFile],
     ) -> Result<LineStatistics> {
         let mut args: Vec<String> = if let Some(commit) = commit {
@@ -35,22 +34,7 @@ impl Git {
                 .map(String::from)
                 .collect()
         } else {
-            let mut args = vec!["diff".to_string()];
-            match scope {
-                ChangeScope::Staged => args.push("--cached".into()),
-                ChangeScope::Working => {}
-                ChangeScope::All => {
-                    let head = self
-                        .run(Some(root), ["rev-parse", "--verify", "HEAD"])
-                        .await;
-                    args.push(if let Ok(head) = head {
-                        String::from_utf8_lossy(&head).trim().into()
-                    } else {
-                        self.empty_tree(root).await?
-                    });
-                }
-            }
-            args
+            vec!["diff".to_string(), self.head_or_empty_tree(root).await?]
         };
         args.extend(
             [
@@ -85,7 +69,7 @@ impl Git {
         }
         // Bound untracked-file I/O. Large/binary/remaining files keep an explicit
         // unavailable value; their line count is never reported as zero.
-        if commit.is_none() && scope != ChangeScope::Staged {
+        if commit.is_none() {
             let mut files = changes.iter().filter(|file| file.status == "??");
             let sample: Vec<_> = files
                 .by_ref()
