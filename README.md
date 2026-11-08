@@ -26,7 +26,7 @@ Githly checks for updates at startup. When a release is available, click the dow
 
 Drag a repository folder into the window or press `Ctrl+O` to open it. On macOS, use `⌘` in place of `Ctrl`.
 
-- Select a staged or unstaged file to compare text or images side by side. Open diffs keep your reading position when the repository refreshes.
+- Select a file in **Changes** to compare text or images in your working tree with the current commit. The two status positions show index and working tree changes, respectively.
 - Select a commit to inspect its changes. Press `Ctrl+F` to search loaded commits or `Ctrl+B` to browse another branch.
 - Open **Stash** to inspect saved changes or **Worktrees** in the top bar to open another working directory.
 

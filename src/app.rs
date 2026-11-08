@@ -1,7 +1,7 @@
 use crate::i18n::{Locale, LocalizedText, messages};
 use crate::{
     config::{Appearance, Config, ConfigStore},
-    git::{ChangedFile, Commit, Git, Repository},
+    git::{ChangedFile, Commit, DiffTarget, Git, Repository},
 };
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::{
@@ -622,7 +622,13 @@ impl GitPanel {
                     .await,
                 ));
             }
-            let patch = git.diff(&root, id.as_deref(), &file).await?;
+            let target = match id.as_deref() {
+                Some(id) => DiffTarget::Commit(id),
+                None => DiffTarget::WorkingTree {
+                    head: original_revision.as_deref(),
+                },
+            };
+            let patch = git.diff(&root, target, &file).await?;
             diff_data::parse(&patch).map(diff_data::Content::Text)
         });
         self.diff_task = Some(cx.spawn(async move |this, cx| {

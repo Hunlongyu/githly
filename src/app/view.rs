@@ -347,9 +347,23 @@ impl GitPanel {
                     } else {
                         cx.theme().warning
                     })
-                    .child(file.status.trim().replace("??", "U")),
+                    .child(if file.status == "??" {
+                        "U".to_owned()
+                    } else {
+                        file.status.replace(' ', "·")
+                    }),
             )
-            .tooltip(move |window, cx| Tooltip::new(full_path.clone()).build(window, cx))
+            .tooltip({
+                let xy = file.status.len() == 2 && file.status != "??";
+                move |window, cx| {
+                    let tip = if xy {
+                        format!("{full_path}\n{}", messages().status_columns())
+                    } else {
+                        full_path.clone()
+                    };
+                    Tooltip::new(tip).build(window, cx)
+                }
+            })
             .when(working, |view| {
                 let counts = self.statistics.files.get(&file.path);
                 view.child(
@@ -752,10 +766,14 @@ impl GitPanel {
                 messages().loading()
             } else if repo.history_pending {
                 messages().new_history()
+            } else if !query_empty {
+                if repo.history_complete {
+                    ""
+                } else {
+                    messages().search_loaded()
+                }
             } else if repo.history_complete {
                 messages().end_of_history()
-            } else if !query_empty {
-                messages().search_loaded()
             } else {
                 ""
             };

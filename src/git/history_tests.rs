@@ -28,7 +28,10 @@ fn non_utf8_git_paths_stay_distinct_in_history_statistics_and_diff_labels() {
     );
     futures_lite::future::block_on(async {
         let files = git.commit_files(root, "HEAD").await.unwrap();
-        let stats = git.line_statistics(root, Some("HEAD"), &[]).await.unwrap();
+        let stats = git
+            .line_statistics(root, DiffTarget::Commit("HEAD"), &[])
+            .await
+            .unwrap();
         assert_eq!(files.len(), 2);
         assert_eq!(files[0].path.as_slice(), b"a\xfe");
         assert_eq!(files[1].path.as_slice(), b"a\xff");
@@ -84,14 +87,23 @@ fn non_utf8_worktree_paths_reach_git_and_filesystem_without_conversion() {
                     .unwrap(),
                 contents.as_bytes()
             );
-            let patch = git.diff(root, None, file).await.unwrap();
+            let patch = git
+                .diff(
+                    root,
+                    DiffTarget::WorkingTree {
+                        head: repo.head.as_deref(),
+                    },
+                    file,
+                )
+                .await
+                .unwrap();
             assert!(patch.contains(&format!("+{contents}\n")));
         }
         command(&git, root, &["add", "--all"]);
         command(&git, root, &["-c", NO_HOOKS, "commit", "-m", "files"]);
         for (file, contents) in repo.changes.iter().zip(["first", "second"]) {
             assert!(
-                git.diff(root, Some("HEAD"), file)
+                git.diff(root, DiffTarget::Commit("HEAD"), file)
                     .await
                     .unwrap()
                     .contains(&format!("+{contents}\n"))
@@ -435,9 +447,12 @@ fn untracked_statistics_bound_metadata_checks_as_well_as_reads() {
             status: "??".into(),
         })
         .collect();
-    let stats =
-        futures_lite::future::block_on(git.line_statistics(directory.path(), None, &changes))
-            .unwrap();
+    let stats = futures_lite::future::block_on(git.line_statistics(
+        directory.path(),
+        DiffTarget::WorkingTree { head: Some("HEAD") },
+        &changes,
+    ))
+    .unwrap();
     assert!(stats.incomplete && stats.files["last.txt".as_bytes()].is_none());
 }
 
@@ -471,16 +486,20 @@ fn stash_details_bind_object_and_include_untracked_versions() {
             .find(|f| f.path == "未跟踪.txt")
             .unwrap();
         assert!(
-            git.diff(root, Some(&id), tracked)
+            git.diff(root, DiffTarget::Commit(&id), tracked)
                 .await
                 .unwrap()
                 .contains("+stash contents")
         );
         assert!(
-            git.diff(root, detail.untracked_revision.as_deref(), untracked)
-                .await
-                .unwrap()
-                .contains("+untracked snapshot")
+            git.diff(
+                root,
+                DiffTarget::Commit(detail.untracked_revision.as_deref().unwrap()),
+                untracked
+            )
+            .await
+            .unwrap()
+            .contains("+untracked snapshot")
         );
     });
 }
@@ -506,11 +525,25 @@ fn working_tree_diff_keeps_dual_status_files_even_with_zero_net_changes() {
             .find(|file| file.path == "file.txt")
             .unwrap();
         assert_eq!(file.status, "MM");
-        let all = git.diff(root, None, file).await.unwrap();
+        // Another tool can advance HEAD after the panel has read status.
+        command(
+            &git,
+            root,
+            &["-c", NO_HOOKS, "commit", "-m", "advance head"],
+        );
+        let target = DiffTarget::WorkingTree {
+            head: repo.head.as_deref(),
+        };
+        let all = git.diff(root, target, file).await.unwrap();
         assert!(
             all.is_empty(),
             "net zero does not remove dual-state file record"
         );
+        let stats = git
+            .line_statistics(root, target, &repo.changes)
+            .await
+            .unwrap();
+        assert!(!stats.files.contains_key(&file.path));
         assert_eq!(
             git.image_file(root, Some(":"), "file.png")
                 .await
@@ -531,7 +564,13 @@ fn working_tree_diff_keeps_dual_status_files_even_with_zero_net_changes() {
         command(&git, empty.path(), &["add", "."]);
         let unborn = git.open(empty.path(), 46).await.unwrap();
         let diff = git
-            .diff(empty.path(), None, &unborn.changes[0])
+            .diff(
+                empty.path(),
+                DiffTarget::WorkingTree {
+                    head: unborn.head.as_deref(),
+                },
+                &unborn.changes[0],
+            )
             .await
             .unwrap();
         assert!(diff.contains("+new"));
@@ -551,7 +590,13 @@ fn asynchronous_statistics_distinguish_text_binary_and_untracked() {
         std::fs::write(root.join("new.txt"), "new\nlines\n").unwrap();
         let repo = git.open(root, 46).await.unwrap();
         let stats = git
-            .line_statistics(root, None, &repo.changes)
+            .line_statistics(
+                root,
+                DiffTarget::WorkingTree {
+                    head: repo.head.as_deref(),
+                },
+                &repo.changes,
+            )
             .await
             .unwrap();
         assert_eq!(stats.files["file.txt".as_bytes()], Some((2, 1)));
@@ -560,7 +605,13 @@ fn asynchronous_statistics_distinguish_text_binary_and_untracked() {
         assert_eq!((stats.added, stats.removed, stats.incomplete), (4, 1, true));
         command(&git, root, &["add", "file.txt"]);
         let stats = git
-            .line_statistics(root, None, &repo.changes)
+            .line_statistics(
+                root,
+                DiffTarget::WorkingTree {
+                    head: repo.head.as_deref(),
+                },
+                &repo.changes,
+            )
             .await
             .unwrap();
         assert_eq!(stats.files.len(), 3);

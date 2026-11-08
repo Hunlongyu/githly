@@ -25,7 +25,14 @@ impl GitPanel {
         self.statistics_read = Some(Instant::now());
         let task = cx.background_spawn(async move {
             if !repo.changes.is_empty() {
-                git.line_statistics(&repo.root, None, &repo.changes).await
+                git.line_statistics(
+                    &repo.root,
+                    DiffTarget::WorkingTree {
+                        head: repo.head.as_deref(),
+                    },
+                    &repo.changes,
+                )
+                .await
             } else {
                 Ok(Default::default())
             }

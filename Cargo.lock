@@ -2204,7 +2204,7 @@ checksum = "1033caf0b349c518623b5396bfb2cf0bddf44f0306d543a250e5743297aafd10"
 
 [[package]]
 name = "githly"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "async-channel",

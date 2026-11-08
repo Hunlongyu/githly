@@ -1,5 +1,17 @@
 # 更新日志
 
+## v0.1.6 · 2026-11-08
+
+- 历史面板显示当前列表中的提交数，搜索后显示匹配数。移除滚动加载提示，接近列表底部时仍会自动加载。
+- 更改面板合并已暂存和未暂存文件，用两位状态标记区分来源。文本差异、图片差异和增删行数使用同一个仓库快照中的基准提交。
+- 在「设置 → 关于」中可打开 GitHub Issues 反馈问题。中英文 README 精简为安装、使用和源码构建三节。
+
+**English**
+
+- The history toolbar counts the commits in the list, including just the matches after a search. More commits load automatically as you scroll, without a persistent hint.
+- The Changes panel lists staged and unstaged files together. Two status positions distinguish index and working tree changes. Text diffs, image diffs, and line counts use the base commit captured with the repository status.
+- Open GitHub Issues from Settings → About. Both READMEs now focus on installation, usage, and building from source.
+
 ## v0.1.5 · 2026-11-08
 
 - 在「设置 → 通用 → 语言」切换语言后，主窗口、设置、搜索提示和状态消息立即刷新。保留当前仓库和搜索内容。中文版统一使用「储藏」「工作树」和「标签」。

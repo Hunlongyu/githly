@@ -25,16 +25,19 @@ impl Git {
     pub async fn line_statistics(
         &self,
         root: &Path,
-        commit: Option<&str>,
+        target: DiffTarget<'_>,
         changes: &[ChangedFile],
     ) -> Result<LineStatistics> {
-        let mut args: Vec<String> = if let Some(commit) = commit {
-            ["show", "--format=", "--diff-merges=first-parent", commit]
-                .into_iter()
-                .map(String::from)
-                .collect()
-        } else {
-            vec!["diff".to_string(), self.head_or_empty_tree(root).await?]
+        let mut args: Vec<String> = match target {
+            DiffTarget::Commit(commit) => {
+                ["show", "--format=", "--diff-merges=first-parent", commit]
+                    .into_iter()
+                    .map(String::from)
+                    .collect()
+            }
+            DiffTarget::WorkingTree { head } => {
+                vec!["diff".to_string(), self.worktree_base(root, head).await?]
+            }
         };
         args.extend(
             [
@@ -69,7 +72,7 @@ impl Git {
         }
         // Bound untracked-file I/O. Large/binary/remaining files keep an explicit
         // unavailable value; their line count is never reported as zero.
-        if commit.is_none() {
+        if matches!(target, DiffTarget::WorkingTree { .. }) {
             let mut files = changes.iter().filter(|file| file.status == "??");
             let sample: Vec<_> = files
                 .by_ref()

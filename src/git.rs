@@ -30,6 +30,12 @@ pub struct Git {
     pub version: String,
 }
 
+#[derive(Clone, Copy)]
+pub enum DiffTarget<'a> {
+    Commit(&'a str),
+    WorkingTree { head: Option<&'a str> },
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChangedFile {
     pub path: BString,
@@ -782,50 +788,54 @@ impl Git {
     pub async fn diff(
         &self,
         root: &Path,
-        commit: Option<&str>,
+        target: DiffTarget<'_>,
         file: &ChangedFile,
     ) -> Result<String> {
-        let output = if let Some(id) = commit {
-            self.run(
-                Some(root),
-                [
+        let output = match target {
+            DiffTarget::Commit(id) => {
+                self.run(
+                    Some(root),
+                    [
+                        "-c",
+                        "core.quotePath=true",
+                        "show",
+                        "--format=",
+                        "--diff-merges=first-parent",
+                        "--no-ext-diff",
+                        "--no-textconv",
+                        "--no-renames",
+                        id,
+                        "--",
+                    ]
+                    .map(OsStr::new)
+                    .into_iter()
+                    .chain([file.path.to_os_str()?]),
+                )
+                .await?
+            }
+            DiffTarget::WorkingTree { .. } if file.status == "??" => {
+                return untracked::patch(self, root, file.path.to_path()?).await;
+            }
+            DiffTarget::WorkingTree { head } => {
+                let mut args: Vec<OsString> = [
                     "-c",
                     "core.quotePath=true",
-                    "show",
-                    "--format=",
-                    "--diff-merges=first-parent",
+                    "diff",
                     "--no-ext-diff",
                     "--no-textconv",
                     "--no-renames",
-                    id,
-                    "--",
                 ]
-                .map(OsStr::new)
                 .into_iter()
-                .chain([file.path.to_os_str()?]),
-            )
-            .await?
-        } else if file.status == "??" {
-            return untracked::patch(self, root, file.path.to_path()?).await;
-        } else {
-            let mut args: Vec<OsString> = [
-                "-c",
-                "core.quotePath=true",
-                "diff",
-                "--no-ext-diff",
-                "--no-textconv",
-                "--no-renames",
-            ]
-            .into_iter()
-            .map(OsString::from)
-            .collect();
-            args.push(self.head_or_empty_tree(root).await?.into());
-            args.push("--".into());
-            args.push(file.path.to_os_str()?.to_owned());
-            if let Some(original) = &file.original_path {
-                args.push(original.to_os_str()?.to_owned());
+                .map(OsString::from)
+                .collect();
+                args.push(self.worktree_base(root, head).await?.into());
+                args.push("--".into());
+                args.push(file.path.to_os_str()?.to_owned());
+                if let Some(original) = &file.original_path {
+                    args.push(original.to_os_str()?.to_owned());
+                }
+                self.run(Some(root), args).await?
             }
-            self.run(Some(root), args).await?
         };
         anyhow::ensure!(
             output.len() <= DIFF_LIMIT,
@@ -834,12 +844,9 @@ impl Git {
         Ok(String::from_utf8_lossy(&output).into())
     }
 
-    async fn head_or_empty_tree(&self, root: &Path) -> Result<String> {
-        if let Ok(head) = self
-            .run(Some(root), ["rev-parse", "--verify", "HEAD"])
-            .await
-        {
-            return Ok(String::from_utf8_lossy(&head).trim().into());
+    async fn worktree_base(&self, root: &Path, head: Option<&str>) -> Result<String> {
+        if let Some(head) = head {
+            return Ok(head.to_owned());
         }
         let output = self
             .run(Some(root), ["hash-object", "-t", "tree", "--stdin"])
@@ -1289,8 +1296,14 @@ mod tests {
             assert_eq!(files.len(), 2);
             let a = files.iter().find(|f| f.path == "文件 a.txt").unwrap();
             let b = files.iter().find(|f| f.path == "b.txt").unwrap();
-            let patch_a = git.diff(root, Some(&repo.commits[0].id), a).await.unwrap();
-            let patch_b = git.diff(root, Some(&repo.commits[0].id), b).await.unwrap();
+            let patch_a = git
+                .diff(root, DiffTarget::Commit(&repo.commits[0].id), a)
+                .await
+                .unwrap();
+            let patch_b = git
+                .diff(root, DiffTarget::Commit(&repo.commits[0].id), b)
+                .await
+                .unwrap();
             assert!(patch_a.contains("+first file"));
             assert!(!patch_b.contains("first file"));
             assert!(patch_b.contains("+second file"));
@@ -1303,7 +1316,16 @@ mod tests {
             std::fs::write(root.join("b.txt"), "changed second file\n").unwrap();
             let repo = git.open(root, 46).await.unwrap();
             assert_eq!(repo.changes.len(), 1);
-            let patch = git.diff(root, None, &repo.changes[0]).await.unwrap();
+            let patch = git
+                .diff(
+                    root,
+                    DiffTarget::WorkingTree {
+                        head: repo.head.as_deref(),
+                    },
+                    &repo.changes[0],
+                )
+                .await
+                .unwrap();
             assert!(patch.contains("+changed second file"));
             // A local upstream exercises ahead/behind without any network access.
             command(&["branch", "upstream"]);
