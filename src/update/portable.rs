@@ -2,7 +2,7 @@ use super::{Installer, MAX_INSTALLER, verify_reader};
 use crate::i18n::{Locale, LocalizedText};
 use anyhow::{Context, Result, ensure};
 use std::{
-    fs::File,
+    fs::{self, File},
     io::{self, Read, Seek},
     path::{Path, PathBuf},
 };
@@ -30,6 +30,26 @@ pub(super) fn is_installed(exe: &Path) -> Result<bool> {
     }
 }
 
+/// Older versions left these directories behind when the running image could
+/// not be moved to the system temp directory. Never remove their contents:
+/// a failed rollback may have left the only copy of the old executable there.
+pub(super) fn clean_empty_staging_dirs(directory: &Path) {
+    let Ok(entries) = fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if entry.file_name().to_str().is_some_and(|name| {
+            name.strip_prefix(".githly-update-").is_some_and(|suffix| {
+                suffix.len() == 6 && suffix.bytes().all(|byte| byte.is_ascii_alphanumeric())
+            })
+        }) && entry.file_type().is_ok_and(|kind| kind.is_dir())
+        {
+            // remove_dir only succeeds for an empty directory.
+            let _ = fs::remove_dir(entry.path());
+        }
+    }
+}
+
 pub(super) fn apply(archive: &Path, package: &Installer) -> Result<PathBuf> {
     let exe = std::env::current_exe()?.canonicalize()?;
     let directory = exe
@@ -48,30 +68,27 @@ pub(super) fn apply(archive: &Path, package: &Installer) -> Result<PathBuf> {
         LocalizedText::new(Locale::invalid_portable_zip)
     );
 
-    // Stage on the destination volume before touching the running binary.
-    let stage = tempfile::Builder::new()
+    // Use sibling files: Windows may keep the old image locked until exit.
+    let mut output = tempfile::Builder::new()
         .prefix(".githly-update-")
-        .tempdir_in(directory)?;
-    let next = stage.path().join("new.exe");
-    let mut output = File::create(&next)?;
+        .tempfile_in(directory)?;
     ensure!(
         io::copy(&mut entry.take(size + 1), &mut output)? == size,
         LocalizedText::new(Locale::invalid_portable_zip)
     );
-    output.sync_all()?;
-    drop(output);
+    output.as_file().sync_all()?;
+    let next = output.into_temp_path();
 
-    let old = stage.path().join("previous.exe");
-    if let Err(error) = self_update::Move::from_source(&next)
-        .replace_using_temp(&old)
-        .to_dest(&exe)
-    {
-        // Move restores the original on failure. Retain its backup if Windows
-        // prevented rollback too.
-        if old.exists() {
-            let recovery = stage.keep();
-            return Err(error).context(recovery.join("previous.exe").display().to_string());
-        }
+    let mut old = tempfile::Builder::new()
+        .prefix(".githly-previous-")
+        .suffix(".exe")
+        .tempfile_in(directory)?
+        .into_temp_path();
+    fs::rename(&exe, &old)?;
+    // From here the backup must survive until rollback or deferred deletion.
+    old.disable_cleanup(true);
+    if let Err(error) = next.persist(&exe) {
+        fs::rename(&old, &exe).with_context(|| old.display().to_string())?;
         return Err(error.into());
     }
     // Windows can rename a running image, but only releases it after exit.

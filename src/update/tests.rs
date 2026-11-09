@@ -366,6 +366,29 @@ fn portable_channel_never_accepts_the_setup_manifest() {
 
 #[cfg(windows)]
 #[test]
+fn portable_cleanup_removes_only_empty_legacy_update_directories() {
+    let dir = tempfile::tempdir().unwrap();
+    let empty = dir.path().join(".githly-update-7FtteU");
+    let recovery = dir.path().join(".githly-update-JQmD88");
+    let unrelated = dir.path().join(".githly-update-notes");
+    let file = dir.path().join(".githly-update-68ZtQg");
+    for path in [&empty, &recovery, &unrelated] {
+        std::fs::create_dir(path).unwrap();
+    }
+    std::fs::write(recovery.join("previous.exe"), b"backup").unwrap();
+    std::fs::write(&file, b"keep").unwrap();
+    portable::clean_empty_staging_dirs(dir.path());
+    assert!(!empty.exists());
+    assert_eq!(
+        std::fs::read(recovery.join("previous.exe")).unwrap(),
+        b"backup"
+    );
+    assert!(unrelated.is_dir());
+    assert_eq!(std::fs::read(file).unwrap(), b"keep");
+}
+
+#[cfg(windows)]
+#[test]
 fn portable_upgrade_replaces_the_running_copy_in_its_own_directory() {
     const CHILD: &str = "GITHLY_TEST_PORTABLE_ARCHIVE";
     let mode = Distribution::Portable;
@@ -416,9 +439,21 @@ fn portable_upgrade_replaces_the_running_copy_in_its_own_directory() {
             "update::tests::portable_upgrade_replaces_the_running_copy_in_its_own_directory",
         ])
         .env(CHILD, &archive)
+        // Force self-delete's same-volume fallback (e.g. portable EXE on a USB drive).
+        .env("TMP", dir.path().join("missing-temp"))
+        .env("TEMP", dir.path().join("missing-temp"))
         .status()
         .unwrap();
     assert!(status.success());
     assert_eq!(std::fs::read(exe).unwrap(), replacement);
     assert_eq!(std::fs::read(unrelated).unwrap(), b"keep");
+    // The deletion helper finishes asynchronously after the old process exits.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::fs::read_dir(dir.path()).unwrap().count() != 3 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "update left temporary entries"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
 }

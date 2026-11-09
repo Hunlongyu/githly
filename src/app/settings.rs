@@ -23,7 +23,7 @@ impl Render for SettingsView {
             .panel
             .update(cx, |panel, cx| match page {
                 SettingsPage::General => panel.general_settings(cx),
-                SettingsPage::About => about_page(cx),
+                SettingsPage::About => about_page(panel, cx),
             })
             .unwrap_or_else(|_| div().into_any_element());
         let navigation = [
@@ -291,7 +291,7 @@ impl GitPanel {
     }
 }
 
-fn about_page(cx: &App) -> AnyElement {
+fn about_page(panel: &GitPanel, cx: &mut Context<GitPanel>) -> AnyElement {
     let links = [
         (
             "about-repository",
@@ -332,6 +332,7 @@ fn about_page(cx: &App) -> AnyElement {
                         ),
                 ),
         )
+        .child(panel.about_update_controls(cx))
         .child(
             v_flex()
                 .border_1()

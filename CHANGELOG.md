@@ -1,5 +1,15 @@
 # 更新日志
 
+## v0.1.7 · 2026-11-09
+
+- 在「设置 → 关于」中点击「检查更新」，即可在 Githly 运行期间检查最新稳定版。发现新版后可直接查看更新说明、下载并安装。重复检查同一版本时会保留已验证的安装包。
+- Windows 便携版在原目录替换程序，检查更新时会清理旧版留下的空临时目录。用于解压更新包的 `zip` 已升至 9.5.0。
+
+**English**
+
+- Click **Check for updates** in Settings → About to check for the latest stable release while Githly is running. Open the release notes there to download and install the update. Checking again keeps a verified download when the release and package still match.
+- Windows portable updates now replace the executable in its own directory and clean up empty staging folders left by older versions. The ZIP extraction library has been updated to 9.5.0.
+
 ## v0.1.6 · 2026-11-08
 
 - 历史面板显示当前列表中的提交数，搜索后显示匹配数。移除滚动加载提示，接近列表底部时仍会自动加载。

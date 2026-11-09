@@ -20,7 +20,7 @@ Install Git, then choose the package for your system.
 | Ubuntu 24.04 x64 | Run `sudo apt install ./Githly-*-linux-x64.deb` in the download directory. |
 | Linux x64 portable | Run `chmod +x Githly-*-linux-x64.AppImage`, then open the file. |
 
-Githly checks for updates at startup. When a release is available, click the download icon in the upper right to read the notes and update.
+Githly checks for updates at startup. To check again, open **Settings → About** and click **Check for updates**. When a release is available, click **View update** there or use the download icon in the upper right of the main window to read the release notes and update.
 
 ## Use
 

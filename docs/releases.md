@@ -9,7 +9,7 @@
 ```powershell
 cargo build --release --locked
 ./scripts/install-inno.ps1
-./scripts/package.ps1 -Tag v0.1.6
+./scripts/package.ps1 -Tag v0.1.7
 ```
 
 编译器脚本从官方不可变版本地址下载 Inno Setup 6.7.4，验证固定 SHA-256、Windows 签名及发布者，便携解压到 `target/tools`，不注册文件关联。也可使用 PATH 中已有的 Inno Setup 6。仅需要便携包时使用 `./scripts/package.ps1 -SkipInstaller`。
@@ -36,7 +36,7 @@ cargo build --release --locked
 
 ## 客户端检查与镜像
 
-每次启动自动检查一次，沿用服务端限流冷却时间。检测到新版本后在窗口右上角显示更新图标。
+每次启动自动检查一次，也可以在「设置 → 关于」中点击「检查更新」。两种方式都沿用服务端限流冷却时间。检测到新版本后，可从关于页或窗口右上角的更新图标打开更新说明。
 
 各平台共用 `self_update` 的 GitHub 后端查询最新正式 Release 并比较版本。Githly 按平台、架构和发行形式精确匹配资产，从同一份响应取得更新日志、文件大小和 SHA-256。资产缺少摘要时读取该版本标签下的清单。API 不可用或处于限流冷却期时，从 GitHub Release 读取对应发行形式的最新清单。用户在更新弹窗中查看日志、下载进度并应用更新。
 

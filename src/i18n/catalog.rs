@@ -57,6 +57,9 @@ messages! {
     settings => "设置", "Settings";
     general => "通用", "General";
     about => "关于", "About";
+    check_updates => "检查更新", "Check for updates";
+    checking_updates => "正在检查更新…", "Checking for updates…";
+    up_to_date => "已是最新版本", "You’re up to date";
     developer => "开发者", "Developer";
     repository_link => "GitHub 仓库", "GitHub repository";
     feedback => "意见反馈", "Feedback";
@@ -268,6 +271,8 @@ formatted_messages! {
     image_preview_failed(error) => "无法预览图片：{error:#}", "Could not preview image: {error:#}";
     draw_image_failed(error) => "图片预览绘制失败：{error}", "Could not draw image preview: {error}";
     download_failed(error) => "下载失败：{error:#}", "Download failed: {error:#}";
+    check_failed(error) => "检查更新失败：{error:#}", "Could not check for updates: {error:#}";
+    view_update(version) => "查看新版 v{version}", "View update v{version}";
     install_failed(error) => "更新失败：{error:#}", "Update failed: {error:#}";
     file_group(heading, count, state) => "{heading}，{count} 个文件，{state}", "{heading}, files: {count}, {state}";
     stash_tab(count) => "储藏  {count}", "Stash  {count}";

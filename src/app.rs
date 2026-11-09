@@ -854,7 +854,7 @@ impl Render for GitPanel {
                     .h_full()
                     .window_control_area(WindowControlArea::Drag),
             )
-            .when(self.updates.update_available(), |bar| {
+            .when(self.updates.available_update().is_some(), |bar| {
                 bar.child(title_control(
                     controls::icon_button(
                         "available-update",

@@ -5,23 +5,65 @@ use gpui_kit::component::{progress::Progress, text::TextView};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+#[derive(Default, PartialEq, Eq)]
+enum UpdateActivity {
+    #[default]
+    Idle,
+    Checking,
+    Downloading,
+    Installing,
+}
+
 #[derive(Default)]
 pub(super) struct UpdateState {
     task: Option<Task<()>>,
     progress: Option<(u64, u64)>,
-    busy: bool,
+    activity: UpdateActivity,
+    check_message: Option<LocalizedText>,
     message: Option<LocalizedText>,
     available: Option<update::Available>,
     installer: Option<PathBuf>,
 }
 
 impl UpdateState {
-    pub(super) fn update_available(&self) -> bool {
-        self.available.is_some()
+    pub(super) fn available_update(&self) -> Option<&update::Available> {
+        self.available
+            .as_ref()
+            .filter(|_| self.activity != UpdateActivity::Checking)
+    }
+
+    fn busy(&self) -> bool {
+        self.activity != UpdateActivity::Idle
+    }
+
+    fn finish_check(&mut self, result: anyhow::Result<Option<update::Available>>) {
+        self.activity = UpdateActivity::Idle;
+        let available = match result {
+            Ok(available) => available,
+            Err(error) => {
+                tracing::warn!("Update check failed: {error:#}");
+                self.check_message =
+                    Some(LocalizedText::with_error(error, |l, e| l.check_failed(e)));
+                return;
+            }
+        };
+        // Keep the verified download only if the release and its package still match.
+        if !matches!((&self.available, &available), (Some(old), Some(new))
+            if old.manifest.version == new.manifest.version
+                && old.distribution == new.distribution
+                && old.manifest.installer.sha256 == new.manifest.installer.sha256)
+        {
+            self.installer = None;
+            self.message = None;
+        }
+        self.check_message = available
+            .is_none()
+            .then(|| LocalizedText::new(Locale::up_to_date));
+        self.available = available;
     }
 
     fn finish_install(&mut self, result: anyhow::Result<update::InstallOutcome>, cx: &mut App) {
-        self.busy = false;
+        self.activity = UpdateActivity::Idle;
         self.message = Some(match result {
             Ok(update::InstallOutcome::Restart(path)) => {
                 cx.set_restart_path(path);
@@ -64,12 +106,11 @@ impl Render for UpdateActions {
 
 impl GitPanel {
     pub(super) fn check_update(&mut self, cx: &mut Context<Self>) {
-        if self.updates.busy {
+        if self.updates.busy() {
             return;
         }
-        self.updates.busy = true;
-        self.updates.available = None;
-        self.updates.installer = None;
+        self.updates.activity = UpdateActivity::Checking;
+        self.updates.check_message = None;
         let mut preferences = self.config.updates.clone();
         let task = cx.background_spawn(async move {
             let result = update::check(&mut preferences);
@@ -78,15 +119,11 @@ impl GitPanel {
         self.updates.task = Some(cx.spawn(async move |this, cx| {
             let (result, retry_after) = task.await;
             let _ = this.update(cx, |this, cx| {
-                this.updates.busy = false;
                 if this.config.updates.api_retry_after != retry_after {
                     this.config.updates.api_retry_after = retry_after;
                     this.save(cx);
                 }
-                match result {
-                    Ok(available) => this.updates.available = available,
-                    Err(error) => tracing::warn!("Update check failed: {error:#}"),
-                }
+                this.updates.finish_check(result);
                 cx.notify();
             });
         }));
@@ -94,13 +131,13 @@ impl GitPanel {
     }
 
     fn download_update(&mut self, cx: &mut Context<Self>) {
-        if self.updates.busy {
+        if self.updates.busy() {
             return;
         }
         let Some(available) = self.updates.available.clone() else {
             return;
         };
-        self.updates.busy = true;
+        self.updates.activity = UpdateActivity::Downloading;
         self.updates.message = Some(LocalizedText::new(Locale::downloading));
         let total = available.manifest.installer.size;
         let received = Arc::new(AtomicU64::new(0));
@@ -133,7 +170,7 @@ impl GitPanel {
             }
             let _ = this.update(cx, |this, cx| {
                 this.updates.progress = None;
-                this.updates.busy = false;
+                this.updates.activity = UpdateActivity::Idle;
                 match result {
                     Ok(path) => {
                         this.updates.installer = Some(path);
@@ -153,7 +190,7 @@ impl GitPanel {
     }
 
     fn install_update(&mut self, cx: &mut Context<Self>) {
-        if self.updates.busy {
+        if self.updates.busy() {
             return;
         }
         let (Some(path), Some(available)) = (
@@ -162,7 +199,7 @@ impl GitPanel {
         ) else {
             return;
         };
-        self.updates.busy = true;
+        self.updates.activity = UpdateActivity::Installing;
         self.updates.message = Some(LocalizedText::new(Locale::opening_installer));
         let task = cx.background_spawn(async move { update::install(&path, &available) });
         self.updates.task = Some(cx.spawn(async move |this, cx| {
@@ -176,7 +213,7 @@ impl GitPanel {
     }
 
     pub(super) fn open_update_dialog(&self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(available) = &self.updates.available else {
+        let Some(available) = self.updates.available_update() else {
             return;
         };
         let version = available.manifest.version.clone();
@@ -214,6 +251,42 @@ impl GitPanel {
         });
     }
 
+    pub(super) fn about_update_controls(&self, cx: &mut Context<Self>) -> AnyElement {
+        let check = controls::button("check-update")
+            .label(if self.updates.activity == UpdateActivity::Checking {
+                messages().checking_updates()
+            } else {
+                messages().check_updates()
+            })
+            .disabled(self.updates.busy())
+            .on_click(cx.listener(|this, _, _, cx| this.check_update(cx)));
+        v_flex()
+            .gap_1()
+            .child(h_flex().gap_2().child(check).when_some(
+                self.updates.available_update(),
+                |row, available| {
+                    row.child(
+                        controls::button("about-release-notes")
+                            .link()
+                            .label(messages().view_update(&available.manifest.version))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                window.close_dialog(cx);
+                                this.open_update_dialog(window, cx);
+                            })),
+                    )
+                },
+            ))
+            .when_some(self.updates.check_message.as_ref(), |view, message| {
+                view.child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(message.to_string()),
+                )
+            })
+            .into_any_element()
+    }
+
     fn update_actions(&self, cx: &mut Context<Self>) -> AnyElement {
         v_flex()
             .w_full()
@@ -234,7 +307,7 @@ impl GitPanel {
             .when_some(self.updates.message.as_ref(), |view, message| {
                 view.child(div().text_size(px(12.)).child(message.to_string()))
             })
-            .when(self.updates.update_available(), |view| {
+            .when(self.updates.available_update().is_some(), |view| {
                 view.child(
                     h_flex()
                         .justify_end()
@@ -242,13 +315,13 @@ impl GitPanel {
                             controls::button("install-update")
                                 .primary()
                                 .label(messages().install_update())
-                                .disabled(self.updates.busy)
+                                .disabled(self.updates.busy())
                                 .on_click(cx.listener(|this, _, _, cx| this.install_update(cx)))
                         } else {
                             controls::button("download-update")
                                 .primary()
                                 .label(messages().download_update())
-                                .disabled(self.updates.busy)
+                                .disabled(self.updates.busy())
                                 .on_click(cx.listener(|this, _, _, cx| this.download_update(cx)))
                         }),
                 )
@@ -277,6 +350,56 @@ mod tests {
         assert_eq!(en, zh);
     }
 
+    fn release() -> Available {
+        Available {
+            distribution: Distribution::Native,
+            manifest: Manifest {
+                version: "1.2.3".into(),
+                notes: "- Faster refresh".into(),
+                // The download worker rejects this fixture before any network request.
+                notes_url: String::new(),
+                installer: Installer {
+                    url: String::new(),
+                    size: 100,
+                    sha256: String::new(),
+                },
+            },
+        }
+    }
+
+    #[test]
+    fn rechecking_keeps_a_verified_download_only_for_the_same_release_asset() {
+        let mut updates = super::UpdateState::default();
+        let mut release = release();
+        updates.finish_check(Ok(Some(release.clone())));
+        let downloaded = std::path::PathBuf::from("verified.zip");
+        updates.installer = Some(downloaded.clone());
+        updates.finish_check(Err(anyhow::anyhow!("offline")));
+        assert!(
+            updates
+                .check_message
+                .as_ref()
+                .unwrap()
+                .to_string()
+                .contains("offline")
+        );
+        assert!(updates.available_update().is_some());
+        assert_eq!(updates.installer.as_ref(), Some(&downloaded));
+
+        updates.finish_check(Ok(Some(release.clone())));
+        assert!(updates.check_message.is_none());
+        assert_eq!(updates.installer.as_ref(), Some(&downloaded));
+        release.manifest.installer.sha256 = "another digest".into();
+        updates.finish_check(Ok(Some(release)));
+        assert!(updates.installer.is_none());
+        updates.finish_check(Ok(None));
+        assert!(updates.available_update().is_none());
+        assert_eq!(
+            updates.check_message.unwrap().to_string(),
+            super::messages().up_to_date()
+        );
+    }
+
     #[gpui_kit::test]
     async fn only_a_completed_install_restarts_the_selected_copy(cx: &mut TestAppContext) {
         let mut updates = super::UpdateState::default();
@@ -298,7 +421,7 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn update_icon_opens_notes_and_download_progress_in_the_same_dialog(cx: &mut TestAppContext) {
+    fn about_checks_for_updates_and_opens_the_existing_download_dialog(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
         let directory = tempfile::tempdir().unwrap();
         let (window, panel) = cx.update(|cx| {
@@ -330,26 +453,20 @@ mod tests {
             assert!(window.try_find("settings-scroll").is_some());
             assert!(window.try_find("update-mode").is_none());
             assert!(window.try_find("check-update").is_none());
-            window.close_dialog(cx);
+            window.click("settings-about", cx);
+            window.click("check-update", cx);
+            assert_eq!(
+                window.find("check-update").label(),
+                Some(super::messages().checking_updates())
+            );
             panel.update(cx, |panel, cx| {
-                panel.updates.available = Some(Available {
-                    distribution: Distribution::Native,
-                    manifest: Manifest {
-                        version: "1.2.3".into(),
-                        notes: "- Faster refresh".into(),
-                        // The worker rejects this fixture before any network request.
-                        notes_url: String::new(),
-                        installer: Installer {
-                            url: String::new(),
-                            size: 100,
-                            sha256: String::new(),
-                        },
-                    },
-                });
+                // Supply a deterministic result before the test executor runs the network task.
+                drop(panel.updates.task.take());
+                panel.updates.finish_check(Ok(Some(release())));
                 cx.notify();
             });
             window.render_frame(cx);
-            window.click("available-update", cx);
+            window.click("about-release-notes", cx);
             assert!(window.try_find("release-notes-body").is_some());
             assert!(window.try_find("settings-scroll").is_none());
             assert!(window.try_find("update-progress").is_none());

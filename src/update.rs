@@ -187,12 +187,20 @@ fn validate(manifest: &Manifest, distribution: Distribution) -> Result<Version> 
 }
 
 pub fn check(preferences: &mut Preferences) -> Result<Option<Available>> {
+    let distribution = Distribution::current()?;
+    #[cfg(windows)]
+    if distribution == Distribution::Portable
+        && let Ok(exe) = std::env::current_exe()
+        && let Some(directory) = exe.parent()
+    {
+        portable::clean_empty_staging_dirs(directory);
+    }
     check_with(
         Arc::new(Http),
         preferences,
         self_update::cargo_crate_version!(),
         now(),
-        Distribution::current()?,
+        distribution,
     )
 }
 
