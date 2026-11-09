@@ -1,5 +1,15 @@
 # 更新日志
 
+## v0.1.8 · 2026-11-09
+
+- 重新设计设置窗口、通用和关于页面，调整外观、语言、动效、Git 与版本信息的布局。
+- 外观支持跟随系统，并在系统主题变化时自动切换。首次使用时，外观、语言和界面动效默认跟随系统。
+
+**English**
+
+- Redesigned the Settings window, General and About pages, including appearance, language, motion, Git and version information.
+- Appearance can follow system theme changes while Githly is running. Appearance, language and motion follow system settings by default on a fresh installation.
+
 ## v0.1.7 · 2026-11-09
 
 - 在「设置 → 关于」中点击「检查更新」，即可在 Githly 运行期间检查最新稳定版。发现新版后可直接查看更新说明、下载并安装。重复检查同一版本时会保留已验证的安装包。

@@ -58,6 +58,7 @@ messages! {
     general => "通用", "General";
     about => "关于", "About";
     check_updates => "检查更新", "Check for updates";
+    current_version => "当前版本", "Current version";
     checking_updates => "正在检查更新…", "Checking for updates…";
     up_to_date => "已是最新版本", "You’re up to date";
     developer => "开发者", "Developer";

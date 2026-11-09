@@ -5,7 +5,7 @@ use crate::{
 };
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::{
-    ActiveTheme, Disableable, IconName, Sizable, StyledExt, ThemeMode, WindowExt,
+    ActiveTheme, Disableable, IconName, Sizable, StyledExt, WindowExt,
     button::ButtonVariants,
     diff::{Diff, DiffMode, DiffState},
     h_flex,
@@ -252,6 +252,10 @@ impl GitPanel {
             updates: updates::UpdateState::default(),
         };
         panel.focus.focus(window, cx);
+        cx.observe_window_appearance(window, |panel, window, cx| {
+            panel.sync_appearance(window.appearance(), cx);
+        })
+        .detach();
         cx.observe_window_activation(window, |panel, _, _| panel.wake_auto_refresh())
             .detach();
         cx.observe_window_visibility(window, |panel, _, _, _| panel.wake_auto_refresh())
@@ -659,21 +663,32 @@ impl GitPanel {
     }
 
     fn theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let dark = !cx.theme().mode.is_dark();
-        crate::theme::apply(
-            if dark {
-                ThemeMode::Dark
-            } else {
-                ThemeMode::Light
-            },
-            Some(window),
-            cx,
-        );
-        self.config.appearance = if dark {
-            Appearance::Dark
-        } else {
+        let preference = if cx.theme().mode.is_dark() {
             Appearance::Light
+        } else {
+            Appearance::Dark
         };
+        self.set_appearance(preference, window, cx);
+    }
+
+    fn sync_appearance(&self, system: WindowAppearance, cx: &mut Context<Self>) {
+        let mode = self.config.appearance.resolve(system);
+        if mode != cx.theme().mode {
+            crate::theme::apply(mode, None, cx);
+        }
+    }
+
+    fn set_appearance(
+        &mut self,
+        preference: Appearance,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.config.appearance == preference {
+            return;
+        }
+        self.config.appearance = preference;
+        self.sync_appearance(window.appearance(), cx);
         self.save(cx);
         cx.notify();
     }

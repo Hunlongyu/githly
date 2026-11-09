@@ -16,8 +16,8 @@ mod theme;
 mod unix_instance;
 mod update;
 
-use config::{Appearance, ConfigStore};
-use gpui_kit::component::{ThemeMode, TitleBar};
+use config::ConfigStore;
+use gpui_kit::component::TitleBar;
 use gpui_kit::*;
 
 fn main() -> anyhow::Result<()> {
@@ -109,11 +109,7 @@ fn main() -> anyhow::Result<()> {
                 None,
             ),
         ]);
-        let mode = match config.appearance {
-            Appearance::Light => ThemeMode::Light,
-            Appearance::Dark => ThemeMode::Dark,
-            Appearance::System => cx.window_appearance().into(),
-        };
+        let mode = config.appearance.resolve(cx.window_appearance());
         theme::apply(mode, None, cx);
         let bounds = Bounds::centered(None, size(px(1280.), px(820.)), cx);
         open_window(

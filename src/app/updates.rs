@@ -253,6 +253,8 @@ impl GitPanel {
 
     pub(super) fn about_update_controls(&self, cx: &mut Context<Self>) -> AnyElement {
         let check = controls::button("check-update")
+            .flex_shrink_0()
+            .icon(IconName::RefreshCw)
             .label(if self.updates.activity == UpdateActivity::Checking {
                 messages().checking_updates()
             } else {
@@ -260,30 +262,51 @@ impl GitPanel {
             })
             .disabled(self.updates.busy())
             .on_click(cx.listener(|this, _, _, cx| this.check_update(cx)));
-        v_flex()
+        let version = v_flex()
+            .flex_1()
+            .min_w_0()
+            .items_start()
             .gap_1()
-            .child(h_flex().gap_2().child(check).when_some(
-                self.updates.available_update(),
-                |row, available| {
-                    row.child(
-                        controls::button("about-release-notes")
-                            .link()
-                            .label(messages().view_update(&available.manifest.version))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                window.close_dialog(cx);
-                                this.open_update_dialog(window, cx);
-                            })),
-                    )
-                },
-            ))
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(div().font_semibold().child(messages().current_version()))
+                    .child(
+                        div()
+                            .id("about-version")
+                            .test_support()
+                            .child(concat!("v", env!("CARGO_PKG_VERSION"))),
+                    ),
+            )
+            .when_some(self.updates.available_update(), |view, available| {
+                view.child(
+                    controls::button("about-release-notes")
+                        .link()
+                        .px_0()
+                        .label(messages().view_update(&available.manifest.version))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            window.close_dialog(cx);
+                            this.open_update_dialog(window, cx);
+                        })),
+                )
+            })
             .when_some(self.updates.check_message.as_ref(), |view, message| {
                 view.child(
                     div()
-                        .text_xs()
+                        .text_size(px(12.))
                         .text_color(cx.theme().muted_foreground)
                         .child(message.to_string()),
                 )
-            })
+            });
+        h_flex()
+            .min_h(px(70.))
+            .gap_3()
+            .px_5()
+            .py_3()
+            .border_t_1()
+            .border_color(cx.theme().border)
+            .child(version)
+            .child(check)
             .into_any_element()
     }
 
@@ -453,7 +476,7 @@ mod tests {
             assert!(window.try_find("settings-scroll").is_some());
             assert!(window.try_find("update-mode").is_none());
             assert!(window.try_find("check-update").is_none());
-            window.click("settings-about", cx);
+            window.within("settings-pages").click(1_usize, cx);
             window.click("check-update", cx);
             assert_eq!(
                 window.find("check-update").label(),

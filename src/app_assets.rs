@@ -16,7 +16,7 @@ pub(crate) fn logo(size: Pixels) -> impl IntoElement {
     img(LOGO.clone()).size(size).flex_shrink_0()
 }
 
-assets::icon_assets!(ExtraIcons, [CloudDownload, Archive, ListX]);
+assets::icon_assets!(ExtraIcons, [CloudDownload, Archive, ListX, MessageSquare]);
 
 pub(crate) struct AppAssets;
 
@@ -49,6 +49,7 @@ mod tests {
             IconName::CloudDownload,
             IconName::Archive,
             IconName::ListX,
+            IconName::MessageSquare,
             IconName::Settings,
         ] {
             let path = icon.path();

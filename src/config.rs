@@ -8,7 +8,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Appearance {
     #[default]
@@ -20,10 +20,15 @@ pub enum Appearance {
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum MotionPreference {
-    System,
     #[default]
+    System,
     Subtle,
     Off,
+}
+
+// Configurations saved before the motion option existed used subtle animations.
+fn legacy_motion_preference() -> MotionPreference {
+    MotionPreference::Subtle
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -42,6 +47,7 @@ pub struct Config {
     pub recent_projects: Vec<PathBuf>,
     pub appearance: Appearance,
     pub language: crate::i18n::Language,
+    #[serde(default = "legacy_motion_preference")]
     pub motion: MotionPreference,
     pub history_display: HistoryDisplay,
     pub file_panel_width: f32,
@@ -264,6 +270,9 @@ mod tests {
             path: dir.path().join("githly/config.json"),
         };
         let mut config = store.load().unwrap();
+        assert_eq!(config.appearance, Appearance::System);
+        assert_eq!(config.language, crate::i18n::Language::System);
+        assert_eq!(config.motion, MotionPreference::System);
         config.git_path = Some(PathBuf::from("D:/Tools/Git/cmd/git.exe"));
         config.remember_project(Path::new("E:/项目"));
         config.remember_project(Path::new("E:/项目"));

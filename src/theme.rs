@@ -1,7 +1,18 @@
 //! Native workbench palette based on VS Code's 2026 Light / Dark themes.
 //! Source and attribution: docs/native-development.md.
+use crate::config::Appearance;
 use gpui_kit::component::{Theme, ThemeMode};
-use gpui_kit::{App, Hsla, Window, px, rgb, rgba};
+use gpui_kit::{App, Hsla, Window, WindowAppearance, px, rgb, rgba};
+
+impl Appearance {
+    pub fn resolve(self, system: WindowAppearance) -> ThemeMode {
+        match self {
+            Self::System => system.into(),
+            Self::Light => ThemeMode::Light,
+            Self::Dark => ThemeMode::Dark,
+        }
+    }
+}
 
 pub fn apply(mode: ThemeMode, window: Option<&mut Window>, cx: &mut App) {
     Theme::change(mode, window, cx);
