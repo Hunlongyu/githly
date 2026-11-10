@@ -87,9 +87,8 @@ pub struct GitPanel {
     stash_tab: bool,
     collapsed_change_groups: [bool; 2],
     file_rows: Option<Arc<file_list::FileRows>>,
-    statistics: crate::git::LineStatistics,
+    statistics: Option<Result<Arc<crate::git::LineStatistics>, String>>,
     statistics_pending: bool,
-    statistics_error: Option<String>,
     statistics_read: Option<std::time::Instant>,
     statistics_task: Option<Task<()>>,
     statistics_generation: u64,
@@ -197,9 +196,8 @@ impl GitPanel {
             stash_tab: false,
             collapsed_change_groups: [false; 2],
             file_rows: None,
-            statistics: crate::git::LineStatistics::default(),
+            statistics: None,
             statistics_pending: false,
-            statistics_error: None,
             statistics_read: None,
             statistics_task: None,
             statistics_generation: 0,
@@ -725,112 +723,120 @@ impl Render for GitPanel {
         let mut title = h_flex()
             .w_full()
             .h_full()
-            .gap_2()
+            .gap(px(10.))
             .text_sm()
-            .child(div().font_semibold().mr_2().child("Githly"));
+            .child(div().flex_shrink_0().font_semibold().mr_1().child("Githly"));
         if let Some(repository) = &self.repository {
             let root = repository.root.clone();
             let recent_projects = self.config.recent_projects.clone();
             let view = cx.entity().downgrade();
-            title = title.child(title_control(
-                controls::button("project-menu")
-                    .icon(IconName::Folder)
-                    .dropdown_caret(true)
-                    .ghost()
-                    .small()
-                    .label(
-                        repository
-                            .root
-                            .file_name()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                            .to_string(),
-                    )
-                    .tooltip(messages().last_read(
-                        repository.root.display(),
-                        self.last_read.as_ref().map_or("—", |read| &read.label),
-                    ))
-                    .dropdown_menu(move |menu, _, _| {
-                        let open = view.clone();
-                        let close = view.clone();
-                        let clear = view.clone();
-                        let mut menu = menu
-                            .max_w(px(460.))
-                            .max_h(px(420.))
-                            .scrollable(true)
-                            .label(messages().recent_projects());
-                        for project in &recent_projects {
-                            let current = *project == root;
-                            let target = project.clone();
-                            let switch = view.clone();
-                            // Include the path to distinguish projects with the same folder name.
-                            menu = menu.item(
-                                PopupMenuItem::new(project.display().to_string())
-                                    .checked(current)
-                                    .on_click(move |_, _, cx| {
-                                        if !current {
-                                            let _ = switch.update(cx, |this, cx| {
-                                                this.load_project(target.clone(), cx)
-                                            });
-                                        }
-                                    }),
-                            );
-                        }
-                        menu.separator()
-                            .item(PopupMenuItem::new(messages().open_another()).on_click(
-                                move |_, _, cx| {
-                                    let _ = open.update(cx, |this, cx| this.choose_path(false, cx));
-                                },
-                            ))
-                            .item(PopupMenuItem::new(messages().clear_recent()).on_click(
-                                move |_, _, cx| {
-                                    let _ = clear.update(cx, |this, cx| {
-                                        this.clear_recent(cx);
-                                    });
-                                },
-                            ))
-                            .separator()
-                            .item(PopupMenuItem::new(messages().close_project()).on_click(
-                                move |_, _, cx| {
-                                    let _ = close.update(cx, |this, cx| {
-                                        this.release_project(cx);
-                                        cx.notify();
-                                    });
-                                },
-                            ))
-                    }),
-            ));
+            let name = root
+                .file_name()
+                .unwrap_or(root.as_os_str())
+                .to_string_lossy();
+            let max_name_width = window.viewport_size().width * 0.3;
+            let project = controls::button("project-menu")
+                .icon(IconName::Folder)
+                .dropdown_caret(true)
+                .ghost()
+                .max_w(max_name_width)
+                .label(title_bar::name_label(&name))
+                .accessibility_label(name.into_owned())
+                .tooltip(messages().last_read(
+                    repository.root.display(),
+                    self.last_read.as_ref().map_or("—", |read| &read.label),
+                ))
+                .dropdown_menu(move |menu, _, _| {
+                    let open = view.clone();
+                    let close = view.clone();
+                    let clear = view.clone();
+                    let mut menu = menu
+                        .max_w(px(460.))
+                        .max_h(px(420.))
+                        .scrollable(true)
+                        .label(messages().recent_projects());
+                    for project in &recent_projects {
+                        let current = *project == root;
+                        let target = project.clone();
+                        let switch = view.clone();
+                        // Include the path to distinguish projects with the same folder name.
+                        menu = menu.item(
+                            PopupMenuItem::new(project.display().to_string())
+                                .checked(current)
+                                .on_click(move |_, _, cx| {
+                                    if !current {
+                                        let _ = switch.update(cx, |this, cx| {
+                                            this.load_project(target.clone(), cx)
+                                        });
+                                    }
+                                }),
+                        );
+                    }
+                    menu.separator()
+                        .item(PopupMenuItem::new(messages().open_another()).on_click(
+                            move |_, _, cx| {
+                                let _ = open.update(cx, |this, cx| this.choose_path(false, cx));
+                            },
+                        ))
+                        .item(PopupMenuItem::new(messages().clear_recent()).on_click(
+                            move |_, _, cx| {
+                                let _ = clear.update(cx, |this, cx| {
+                                    this.clear_recent(cx);
+                                });
+                            },
+                        ))
+                        .separator()
+                        .item(PopupMenuItem::new(messages().close_project()).on_click(
+                            move |_, _, cx| {
+                                let _ = close.update(cx, |this, cx| {
+                                    this.release_project(cx);
+                                    cx.notify();
+                                });
+                            },
+                        ))
+                });
+            title = title.child(
+                title_group(cx)
+                    .flex_shrink_0()
+                    .child(title_control(project)),
+            );
             if repository.has_other_worktrees
                 && let Some(git) = &self.git
             {
-                title = title.child(title_control(worktrees::dropdown(
+                let worktrees = worktrees::dropdown(
                     git.clone(),
                     repository.root.clone(),
                     cx.entity().downgrade(),
-                )));
+                );
+                title = title.child(
+                    title_group(cx)
+                        .flex_shrink_0()
+                        .child(title_control(worktrees)),
+                );
             }
-            title = title.child(title_control(
-                gpui_kit::component::popover::Popover::new("branches-popover")
-                    .p_0()
-                    .open(self.branch_open)
-                    .trigger(
-                        controls::button("branches")
-                            .icon(IconName::Network)
-                            .dropdown_caret(true)
-                            .ghost()
-                            .small()
-                            .label(repository.branch_label().to_owned()),
-                    )
-                    .on_open_change(cx.listener(|this, open: &bool, window, cx| {
-                        this.branch_open = *open;
-                        if *open {
-                            this.branch_picker
-                                .update(cx, |picker, cx| picker.focus_search(window, cx));
-                        }
-                        cx.notify();
-                    }))
-                    .child(self.branch_picker.clone()),
-            ));
+            let branch_name = repository.branch_label();
+            let branch = gpui_kit::component::popover::Popover::new("branches-popover")
+                .p_0()
+                .open(self.branch_open)
+                .trigger(
+                    controls::button("branches")
+                        .icon(IconName::Network)
+                        .dropdown_caret(true)
+                        .ghost()
+                        .max_w(max_name_width)
+                        .tooltip(branch_name.to_owned())
+                        .label(title_bar::name_label(branch_name))
+                        .accessibility_label(branch_name.to_owned()),
+                )
+                .on_open_change(cx.listener(|this, open: &bool, window, cx| {
+                    this.branch_open = *open;
+                    if *open {
+                        this.branch_picker
+                            .update(cx, |picker, cx| picker.focus_search(window, cx));
+                    }
+                    cx.notify();
+                }))
+                .child(self.branch_picker.clone());
             let (tracking_text, tracking_tip) = match &repository.tracking {
                 Some(tracking) => match tracking.counts {
                     Some((ahead, behind)) => (
@@ -847,20 +853,23 @@ impl Render for GitPanel {
                     messages().no_upstream_tip().into(),
                 ),
             };
-            title = title.child(
-                div()
-                    .id("branch-tracking")
-                    .max_w(px(260.))
-                    .min_w_0()
-                    .text_size(px(12.))
-                    .text_color(cx.theme().muted_foreground)
-                    .truncate()
-                    .child(tracking_text)
-                    .tooltip(move |window, cx| {
-                        gpui_kit::component::tooltip::Tooltip::new(tracking_tip.clone())
-                            .build(window, cx)
-                    }),
-            );
+            let tracking = div()
+                .id("branch-tracking")
+                .test_support()
+                .max_w(px(260.))
+                .min_w_0()
+                .px_2()
+                .border_l_1()
+                .border_color(cx.theme().border)
+                .text_size(px(12.))
+                .text_color(cx.theme().muted_foreground)
+                .truncate()
+                .child(tracking_text)
+                .tooltip(move |window, cx| {
+                    gpui_kit::component::tooltip::Tooltip::new(tracking_tip.clone())
+                        .build(window, cx)
+                });
+            title = title.child(title_group(cx).child(title_control(branch)).child(tracking));
         }
         title = title
             .child(
@@ -1047,4 +1056,12 @@ fn title_control(element: impl IntoElement) -> impl IntoElement {
         .occlude()
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .child(element)
+}
+
+fn title_group(cx: &App) -> Div {
+    h_flex()
+        .min_w_0()
+        .h(px(controls::CONTROL_HEIGHT))
+        .rounded(px(4.))
+        .bg(cx.theme().muted)
 }

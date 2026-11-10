@@ -252,16 +252,26 @@ impl GitPanel {
     }
 
     pub(super) fn about_update_controls(&self, cx: &mut Context<Self>) -> AnyElement {
-        let check = controls::button("check-update")
-            .flex_shrink_0()
-            .icon(IconName::RefreshCw)
-            .label(if self.updates.activity == UpdateActivity::Checking {
-                messages().checking_updates()
-            } else {
-                messages().check_updates()
-            })
-            .disabled(self.updates.busy())
-            .on_click(cx.listener(|this, _, _, cx| this.check_update(cx)));
+        let button = controls::button("check-update").flex_shrink_0();
+        let update_button = if let Some(available) = self.updates.available_update() {
+            button
+                .icon(gpui_kit::assets::IconName::CloudDownload)
+                .label(messages().view_update(&available.manifest.version))
+                .on_click(cx.listener(|this, _, window, cx| {
+                    window.close_dialog(cx);
+                    this.open_update_dialog(window, cx);
+                }))
+        } else {
+            button
+                .icon(IconName::RefreshCw)
+                .label(if self.updates.activity == UpdateActivity::Checking {
+                    messages().checking_updates()
+                } else {
+                    messages().check_updates()
+                })
+                .disabled(self.updates.busy())
+                .on_click(cx.listener(|this, _, _, cx| this.check_update(cx)))
+        };
         let version = v_flex()
             .flex_1()
             .min_w_0()
@@ -278,18 +288,6 @@ impl GitPanel {
                             .child(concat!("v", env!("CARGO_PKG_VERSION"))),
                     ),
             )
-            .when_some(self.updates.available_update(), |view, available| {
-                view.child(
-                    controls::button("about-release-notes")
-                        .link()
-                        .px_0()
-                        .label(messages().view_update(&available.manifest.version))
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            window.close_dialog(cx);
-                            this.open_update_dialog(window, cx);
-                        })),
-                )
-            })
             .when_some(self.updates.check_message.as_ref(), |view, message| {
                 view.child(
                     div()
@@ -306,7 +304,7 @@ impl GitPanel {
             .border_t_1()
             .border_color(cx.theme().border)
             .child(version)
-            .child(check)
+            .child(update_button)
             .into_any_element()
     }
 
@@ -477,6 +475,10 @@ mod tests {
             assert!(window.try_find("update-mode").is_none());
             assert!(window.try_find("check-update").is_none());
             window.within("settings-pages").click(1_usize, cx);
+            assert_eq!(
+                window.find("check-update").label(),
+                Some(super::messages().check_updates())
+            );
             window.click("check-update", cx);
             assert_eq!(
                 window.find("check-update").label(),
@@ -489,7 +491,12 @@ mod tests {
                 cx.notify();
             });
             window.render_frame(cx);
-            window.click("about-release-notes", cx);
+            assert_eq!(
+                window.find("check-update").label(),
+                Some(super::messages().view_update("1.2.3").as_str())
+            );
+            assert!(window.try_find("about-release-notes").is_none());
+            window.click("check-update", cx);
             assert!(window.try_find("release-notes-body").is_some());
             assert!(window.try_find("settings-scroll").is_none());
             assert!(window.try_find("update-progress").is_none());

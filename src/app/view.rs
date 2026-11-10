@@ -357,9 +357,14 @@ impl GitPanel {
                     .gap(px(4.))
                     .text_xs()
                     .text_color(cx.theme().muted_foreground);
-                row.child(if self.statistics_pending {
+                let counts = self
+                    .statistics
+                    .as_ref()
+                    .and_then(|result| result.as_ref().ok())
+                    .and_then(|stats| stats.files.get(&file.path));
+                row.child(if self.statistics.is_none() {
                     stats.child("…")
-                } else if let Some(Some((added, removed))) = self.statistics.files.get(&file.path) {
+                } else if let Some(Some((added, removed))) = counts {
                     stats
                         .child(
                             div()
@@ -656,22 +661,21 @@ impl GitPanel {
                     ),
             )
             .when(!self.stash_tab, |view| {
-                let stats = &self.statistics;
-                let summary = if repo.changes.is_empty() {
-                    None
-                } else if self.statistics_pending {
-                    Some(messages().calculating_stats().to_string())
-                } else if self.statistics_error.is_some() {
-                    Some(messages().stats_unavailable().into())
-                } else if stats.added == 0 && stats.removed == 0 {
-                    stats.incomplete.then(|| messages().partial_stats().into())
-                } else {
-                    let note = if stats.incomplete {
-                        messages().partial_stats_suffix()
-                    } else {
-                        ""
-                    };
-                    Some(format!("+{} −{}{note}", stats.added, stats.removed))
+                let summary = match &self.statistics {
+                    _ if repo.changes.is_empty() => None,
+                    None => Some(messages().calculating_stats().to_string()),
+                    Some(Err(_)) => Some(messages().stats_unavailable().into()),
+                    Some(Ok(stats)) if stats.added == 0 && stats.removed == 0 => {
+                        stats.incomplete.then(|| messages().partial_stats().into())
+                    }
+                    Some(Ok(stats)) => {
+                        let note = if stats.incomplete {
+                            messages().partial_stats_suffix()
+                        } else {
+                            ""
+                        };
+                        Some(format!("+{} −{}{note}", stats.added, stats.removed))
+                    }
                 };
                 view.child(
                     div()

@@ -40,9 +40,8 @@ impl GitPanel {
         self.branch_open = false;
         self.statistics_task = None;
         self.statistics_pending = false;
-        self.statistics_error = None;
         self.statistics_read = None;
-        let statistics = std::mem::take(&mut self.statistics);
+        let statistics = self.statistics.take();
         cx.background_spawn(async move { drop(statistics) })
             .detach();
         self.last_read = None;

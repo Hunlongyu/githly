@@ -1,7 +1,7 @@
 use super::*;
 use std::collections::HashMap;
 
-#[derive(Default)]
+#[derive(Default, PartialEq, Eq)]
 pub struct LineStatistics {
     pub files: HashMap<BString, Option<(u64, u64)>>,
     pub added: u64,

@@ -1,5 +1,17 @@
 # 更新日志
 
+## v0.1.11 · 2026-11-10
+
+- 标题栏用浅色块区分项目、工作树和分支。项目名和分支名随窗口宽度展开，超过 32 个字符时显示省略号，悬停可查看全名。
+- 切回窗口时，更改列表保留上次显示的增删行数，后台统计结果有变化时才更新，避免数字闪动。
+- 「设置 → 关于」检测到新版本后，「检查更新」按钮会显示新版版本号，点击即可查看更新说明。
+
+**English**
+
+- Subtle backgrounds separate the project, worktrees and branch in the title bar. Project and branch names expand with the window and are shortened after 32 characters. Hover to read the full name.
+- The Changes list keeps its line counts visible when you return to the window. Counts update when the background check finds a difference.
+- In Settings → About, the update button shows the new version when one is available. Click it to read the release notes.
+
 ## v0.1.10 · 2026-11-10
 
 - 文件列表使用 `M`、`D`、`U` 等 Git 状态标记替代文件图标，并在文件名前对齐显示。

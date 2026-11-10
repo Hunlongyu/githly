@@ -155,14 +155,25 @@ fn worktree_dropdown_opens_a_linked_directory(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let (repo, git) = fixture(1);
     let storage = tempfile::tempdir().unwrap();
-    let linked = storage.path().join("linked");
+    let project_name = "bookmarks-management-dashboard";
+    let linked = storage.path().join(project_name);
+    let branch = "feature/long-branch-name-in-the-title-bar";
+    command(&git, repo.path(), &["branch", "-m", branch]);
     command(
         &git,
         repo.path(),
         &["worktree", "add", "-b", "linked", linked.to_str().unwrap()],
     );
+    command(&git, repo.path(), &["branch", "--set-upstream-to=linked"]);
+    let options = WindowOptions {
+        window_bounds: Some(gpui_kit::WindowBounds::Windowed(gpui_kit::Bounds {
+            origin: Default::default(),
+            size: gpui_kit::size(px(900.), px(600.)),
+        })),
+        ..Default::default()
+    };
     let (window, panel) = cx.update(|cx| {
-        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+        gpui_kit::open_window(options, cx, |window, cx| {
             cx.new(|cx| {
                 GitPanel::new(
                     ConfigStore {
@@ -181,6 +192,20 @@ fn worktree_dropdown_opens_a_linked_directory(cx: &mut TestAppContext) {
     wait_for_git(cx, &panel, |panel| panel.repository.is_some());
     cx.update_window(window, |_, window, cx| {
         window.render_frame(cx);
+        let project = window.find("project-menu").bounds();
+        let worktrees = window.find("worktrees").bounds();
+        let branches = window.find("branches").bounds();
+        let tracking = window.find("branch-tracking").bounds();
+        #[cfg(target_os = "windows")]
+        {
+            let bar = window.find("window-title-bar").bounds();
+            for control in [project, worktrees, branches] {
+                assert_eq!(control.top() - bar.top(), bar.bottom() - control.bottom());
+            }
+        }
+        assert!(project.right() < worktrees.left() && worktrees.right() < branches.left());
+        assert!(branches.right() <= tracking.left() && tracking.size.width > px(0.));
+        assert!(tracking.right() < window.find("theme").bounds().left());
         window.click("worktrees", cx);
         assert!(
             window.find("popup-menu").bounds().top() >= window.find("worktrees").bounds().bottom()
@@ -216,6 +241,17 @@ fn worktree_dropdown_opens_a_linked_directory(cx: &mut TestAppContext) {
             .as_ref()
             .is_some_and(|repo| repo.branch == "linked")
     });
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        let project = window.find("project-menu");
+        assert_eq!(project.label(), Some(project_name));
+        assert!(project.bounds().size.width > px(170.));
+        assert!(project.bounds().right() < window.find("worktrees").bounds().left());
+        assert!(
+            window.find("branch-tracking").bounds().right() < window.find("theme").bounds().left()
+        );
+    })
+    .unwrap();
     panel.update(cx, |panel, cx| panel.release_project(cx));
 }
 
@@ -389,6 +425,10 @@ fn focus_and_background_timers_respect_the_last_repository_read(cx: &mut TestApp
     cx.executor().allow_parking();
     cx.update(gpui_kit::init);
     let (directory, git) = fixture(2);
+    let tracked = directory.path().join("tracked.txt");
+    std::fs::write(&tracked, "staged\n").unwrap();
+    command(&git, directory.path(), &["add", "tracked.txt"]);
+    std::fs::write(&tracked, "first\n").unwrap();
     let storage = tempfile::tempdir().unwrap();
     let (window, panel) = cx.update(|cx| {
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
@@ -417,6 +457,23 @@ fn focus_and_background_timers_respect_the_last_repository_read(cx: &mut TestApp
         p.repository.is_some() && !p.statistics_pending
     });
     let mut view = gpui_kit::VisualTestContext::from_window(window, cx);
+    let (before, generation) = panel.update(cx, |p, _| {
+        let stats = p.statistics.as_ref().unwrap().as_ref().unwrap();
+        assert_eq!(stats.added, 1);
+        (stats.clone(), p.statistics_generation)
+    });
+    view.deactivate_window();
+    cx.executor().advance_clock(Duration::from_secs(61));
+    focus(cx);
+    wait_for_git(cx, &panel, |p| {
+        p.statistics_generation > generation && !p.statistics_pending
+    });
+    panel.update(cx, |p, _| {
+        assert!(Arc::ptr_eq(
+            &before,
+            p.statistics.as_ref().unwrap().as_ref().unwrap()
+        ));
+    });
     let marker = directory.path().join("external.txt");
     let has_marker = |p: &GitPanel| {
         p.repository
@@ -433,7 +490,7 @@ fn focus_and_background_timers_respect_the_last_repository_read(cx: &mut TestApp
     };
     let allow_read = |cx: &mut TestAppContext| panel.update(cx, |p, _| p.git = Some(git.clone()));
 
-    // A recent open counts as a read. Refocusing must keep the remaining
+    // Refocusing after a recent read must keep the remaining
     // millisecond of the foreground timer, without querying immediately.
     forbid_read(cx);
     view.deactivate_window();
@@ -451,13 +508,16 @@ fn focus_and_background_timers_respect_the_last_repository_read(cx: &mut TestApp
     view.deactivate_window();
     forbid_read(cx);
     std::fs::remove_file(&marker).unwrap();
+    std::fs::write(&tracked, "first\nsecond\n").unwrap();
     cx.executor().advance_clock(Duration::from_secs(599));
     panel.update(cx, |p, _| {
         assert!(p.refresh_error.is_none() && has_marker(p))
     });
     allow_read(cx);
     cx.executor().advance_clock(Duration::from_secs(1));
-    wait_for_git(cx, &panel, |p| !has_marker(p));
+    wait_for_git(cx, &panel, |p| {
+        !has_marker(p) && p.statistics.as_ref().unwrap().as_ref().unwrap().added == 2
+    });
 
     // An overdue focus check wakes the 600s wait without advancing time again.
     cx.executor().advance_clock(Duration::from_secs(4));
