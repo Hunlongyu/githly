@@ -1,5 +1,15 @@
 # 更新日志
 
+## v0.1.10 · 2026-11-10
+
+- 文件列表使用 `M`、`D`、`U` 等 Git 状态标记替代文件图标，并在文件名前对齐显示。
+- 更改列表右侧的新增、删除行数分别使用主题绿色和红色，适配深浅外观。悬停文件可查看完整的暂存区和工作区状态。
+
+**English**
+
+- File lists now show Git status markers such as `M`, `D` and `U` in place of file icons, aligned before each filename.
+- Added and removed line counts use the theme's green and red colors in both light and dark appearances. Hover over a file to see its full index and working tree status.
+
 ## v0.1.9 · 2026-11-10
 
 - Windows 便携版支持随 U 盘携带设置。把 `config.json` 放在 `Githly.exe` 旁，程序就会在该目录读取和保存设置。同目录没有配置时，沿用 AppData 中的配置，两处都没有时在 AppData 中创建默认配置。

@@ -1,6 +1,6 @@
 # Githly 原生开发进度
 
-当前版本为 0.1.9，在 Windows x64、macOS Apple Silicon / Intel 和 Ubuntu 24.04 amd64 上构建和验证。
+当前版本为 0.1.10，在 Windows x64、macOS Apple Silicon / Intel 和 Ubuntu 24.04 amd64 上构建和验证。
 
 ## 技术与构建
 

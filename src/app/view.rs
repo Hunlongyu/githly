@@ -309,9 +309,24 @@ impl GitPanel {
                 row.hover(|style| style.bg(cx.theme().list_hover))
             })
             .child(
-                Icon::new(IconName::File)
-                    .size_4()
-                    .text_color(cx.theme().muted_foreground),
+                div()
+                    .w(px(22.))
+                    .flex_shrink_0()
+                    .text_center()
+                    .text_size(px(12.))
+                    .font_semibold()
+                    .text_color(if file.status.contains('D') {
+                        cx.theme().danger
+                    } else if file.status.contains('A') || file.status == "??" {
+                        cx.theme().success
+                    } else {
+                        cx.theme().warning
+                    })
+                    .child(if file.status == "??" {
+                        "U".to_owned()
+                    } else {
+                        file.status.trim().to_owned()
+                    }),
             )
             .child(
                 h_flex()
@@ -336,49 +351,41 @@ impl GitPanel {
                             .child(if directory.is_empty() { "/" } else { directory }.to_string()),
                     ),
             )
-            .child(
-                div()
+            .when(working, |row| {
+                let stats = h_flex()
                     .flex_shrink_0()
-                    .text_size(px(12.))
-                    .text_color(if file.status.contains('D') {
-                        cx.theme().danger
-                    } else if file.status.contains('A') || file.status == "??" {
-                        cx.theme().success
-                    } else {
-                        cx.theme().warning
-                    })
-                    .child(if file.status == "??" {
-                        "U".to_owned()
-                    } else {
-                        file.status.replace(' ', "·")
-                    }),
-            )
+                    .gap(px(4.))
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground);
+                row.child(if self.statistics_pending {
+                    stats.child("…")
+                } else if let Some(Some((added, removed))) = self.statistics.files.get(&file.path) {
+                    stats
+                        .child(
+                            div()
+                                .text_color(cx.theme().success)
+                                .child(format!("+{added}")),
+                        )
+                        .child(
+                            div()
+                                .text_color(cx.theme().danger)
+                                .child(format!("−{removed}")),
+                        )
+                } else {
+                    stats.child("—")
+                })
+            })
             .tooltip({
-                let xy = file.status.len() == 2 && file.status != "??";
+                let xy = (working && file.status.len() == 2 && file.status != "??")
+                    .then(|| file.status.replace(' ', "·"));
                 move |window, cx| {
-                    let tip = if xy {
-                        format!("{full_path}\n{}", messages().status_columns())
+                    let tip = if let Some(xy) = &xy {
+                        format!("{full_path}\n{xy}  {}", messages().status_columns())
                     } else {
                         full_path.clone()
                     };
                     Tooltip::new(tip).build(window, cx)
                 }
-            })
-            .when(working, |view| {
-                let counts = self.statistics.files.get(&file.path);
-                view.child(
-                    div()
-                        .flex_shrink_0()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(if self.statistics_pending {
-                            "…".to_string()
-                        } else if let Some(Some((added, removed))) = counts {
-                            format!("+{added} −{removed}")
-                        } else {
-                            "—".into()
-                        }),
-                )
             })
             .on_click(cx.listener(move |this, _, window, cx| {
                 if working {
