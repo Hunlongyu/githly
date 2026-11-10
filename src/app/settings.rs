@@ -616,7 +616,7 @@ mod tests {
             assert_eq!(&*gpui_kit::component::locale(), "en");
             assert_eq!(
                 search.read(cx).presentation().placeholder().as_ref(),
-                "Search messages, authors, or hashes"
+                "Search message, author, hash"
             );
             assert_eq!(search.read(cx).value().as_ref(), "feature/分支");
             assert_eq!(panel.read(cx).config.language, Language::English);

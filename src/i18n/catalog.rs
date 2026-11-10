@@ -33,7 +33,7 @@ macro_rules! formatted_messages {
 messages! {
     status_columns => "左位为暂存区状态，右位为工作区状态，· 表示无更改", "Left: index status. Right: working tree status. A dot means unchanged.";
     filter_paths => "按路径筛选更改", "Filter changes by path";
-    search_history => "搜索说明、作者、哈希", "Search messages, authors, or hashes";
+    search_history => "搜索说明、作者、哈希", "Search message, author, hash";
     choose_git_exe => "选择 Git 可执行文件", "Select Git executable";
     open_project => "加载项目", "Open project";
     loading_files => "正在读取文件…", "Loading files…";
