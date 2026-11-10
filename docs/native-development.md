@@ -1,6 +1,6 @@
 # Githly 原生开发进度
 
-当前版本为 0.1.8，在 Windows x64、macOS Apple Silicon / Intel 和 Ubuntu 24.04 amd64 上构建和验证。
+当前版本为 0.1.9，在 Windows x64、macOS Apple Silicon / Intel 和 Ubuntu 24.04 amd64 上构建和验证。
 
 ## 技术与构建
 
@@ -41,7 +41,7 @@
 
 ## 配置和日志
 
-配置：`%APPDATA%\githly\config.json`。保存 Git 路径、最近项目、主题、动效、历史显示及面板尺寸。损坏或不兼容的配置不被静默覆盖。
+启动时优先读写可执行文件同目录的 `config.json`。该文件不存在时使用用户配置目录，Windows 下为 `%APPDATA%\githly\config.json`，缺失时创建默认配置。配置保存 Git 路径、最近项目、主题、动效、历史显示及面板尺寸。损坏或不兼容的配置不被静默覆盖。
 
 普通运行日志：`%LOCALAPPDATA%\githly\logs`，默认记录警告和错误。
 

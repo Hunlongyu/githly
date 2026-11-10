@@ -9,7 +9,7 @@
 ```powershell
 cargo build --release --locked
 ./scripts/install-inno.ps1
-./scripts/package.ps1 -Tag v0.1.8
+./scripts/package.ps1 -Tag v0.1.9
 ```
 
 编译器脚本从官方不可变版本地址下载 Inno Setup 6.7.4，验证固定 SHA-256、Windows 签名及发布者，便携解压到 `target/tools`，不注册文件关联。也可使用 PATH 中已有的 Inno Setup 6。仅需要便携包时使用 `./scripts/package.ps1 -SkipInstaller`。

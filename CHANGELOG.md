@@ -1,5 +1,15 @@
 # 更新日志
 
+## v0.1.9 · 2026-11-10
+
+- Windows 便携版支持随 U 盘携带设置。把 `config.json` 放在 `Githly.exe` 旁，程序就会在该目录读取和保存设置。同目录没有配置时，沿用 AppData 中的配置，两处都没有时在 AppData 中创建默认配置。
+- 修复英文界面中提交搜索框提示文字显示不全的问题。
+
+**English**
+
+- Windows users can carry their settings on a USB drive by placing `config.json` beside `Githly.exe`. Githly reads and saves that file when present. Otherwise it uses the AppData configuration, creating it with defaults on first use.
+- Fixed clipped placeholder text in the commit search field when using the English interface.
+
 ## v0.1.8 · 2026-11-09
 
 - 重新设计设置窗口、通用和关于页面，调整外观、语言、动效、Git 与版本信息的布局。

@@ -171,18 +171,46 @@ pub struct ConfigStore {
 
 impl ConfigStore {
     pub fn for_app() -> Result<Self> {
-        let base =
-            BaseDirs::new().with_context(|| LocalizedText::new(Locale::config_dir_missing))?;
-        Ok(Self {
-            path: base.config_dir().join("githly").join("config.json"),
+        Self::locate(&std::env::current_exe()?, || {
+            let base =
+                BaseDirs::new().with_context(|| LocalizedText::new(Locale::config_dir_missing))?;
+            Ok(base.config_dir().join("githly"))
         })
+    }
+
+    fn locate(exe: &Path, user_dir: impl FnOnce() -> Result<PathBuf>) -> Result<Self> {
+        let sibling = exe.with_file_name("config.json");
+        let path = match fs::symlink_metadata(&sibling) {
+            Ok(_) => sibling,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                user_dir()?.join("config.json")
+            }
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| LocalizedText::new(|l| l.cannot_read(sibling.display())));
+            }
+        };
+        Ok(Self { path })
     }
 
     pub fn load(&self) -> Result<Config> {
         let bytes = match fs::read(&self.path) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Config::default());
+                let config = Config::default();
+                let temporary = self.stage(&config)?;
+                match temporary.persist_noclobber(&self.path) {
+                    Ok(_) => return Ok(config),
+                    // Another launch may have created the configuration first.
+                    Err(e) if e.error.kind() == std::io::ErrorKind::AlreadyExists => {
+                        fs::read(&self.path).with_context(|| {
+                            LocalizedText::new(|l| l.cannot_read(self.path.display()))
+                        })?
+                    }
+                    Err(e) => {
+                        return Err(e).with_context(|| LocalizedText::new(Locale::save_config));
+                    }
+                }
             }
             Err(error) => {
                 return Err(error)
@@ -198,7 +226,7 @@ impl ConfigStore {
         Ok(config)
     }
 
-    pub fn save(&self, config: &Config) -> Result<()> {
+    fn stage(&self, config: &Config) -> Result<tempfile::NamedTempFile> {
         let directory = self
             .path
             .parent()
@@ -214,7 +242,11 @@ impl ConfigStore {
             .as_file()
             .sync_all()
             .with_context(|| LocalizedText::new(Locale::write_config))?;
-        let mut path = temporary.into_temp_path();
+        Ok(temporary)
+    }
+
+    pub fn save(&self, config: &Config) -> Result<()> {
+        let mut path = self.stage(config)?.into_temp_path();
         let mut retries = 0;
         loop {
             match path.persist(&self.path) {
@@ -241,6 +273,36 @@ impl ConfigStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn portable_config_takes_precedence_for_reads_and_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("githly.exe");
+        let local = dir.path().join("config.json");
+        let locate =
+            || ConfigStore::locate(&exe, || Ok(dir.path().join("appdata/githly"))).unwrap();
+
+        let user = locate();
+        assert_eq!(user.path, dir.path().join("appdata/githly/config.json"));
+        assert_eq!(user.load().unwrap().motion, MotionPreference::System);
+        let defaults = fs::read(&user.path).unwrap();
+        assert!(!local.exists());
+
+        fs::write(&local, br#"{"appearance":"dark"}"#).unwrap();
+        let portable = locate();
+        assert_eq!(portable.path, local);
+        let mut config = portable.load().unwrap();
+        assert_eq!(config.appearance, Appearance::Dark);
+        config.appearance = Appearance::Light;
+        portable.save(&config).unwrap();
+        assert_eq!(locate().load().unwrap().appearance, Appearance::Light);
+        fs::write(&local, b"invalid").unwrap();
+        assert!(locate().load().is_err());
+        assert_eq!(fs::read(&local).unwrap(), b"invalid");
+        fs::remove_file(local).unwrap();
+        assert_eq!(locate().load().unwrap().appearance, Appearance::System);
+        assert_eq!(fs::read(user.path).unwrap(), defaults);
+    }
     #[test]
     fn native_paths_do_not_prevent_saving_other_preferences() {
         use std::ffi::OsString;

@@ -22,6 +22,8 @@ Install Git, then choose the package for your system.
 
 Githly checks for updates at startup. To check again, open **Settings → About** and click **Check for updates**. When a release is available, click **View update** there or use the download icon in the upper right of the main window to read the release notes and update.
 
+To carry your settings on a USB drive on Windows, quit Githly, copy `%APPDATA%\githly\config.json` next to `Githly.exe`, then start that copy. You can also create a `config.json` containing `{}` beside the executable. Githly reads and saves that file when present. Otherwise it uses the AppData configuration, creating it with defaults if needed.
+
 ## Use
 
 Drag a repository folder into the window or press `Ctrl+O` to open it. On macOS, use `⌘` in place of `Ctrl`.
