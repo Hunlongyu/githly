@@ -1,10 +1,10 @@
 # Githly 原生开发进度
 
-当前版本为 0.1.11，在 Windows x64、macOS Apple Silicon / Intel 和 Ubuntu 24.04 amd64 上构建和验证。
+当前版本为 0.1.12，在 Windows x64、macOS Apple Silicon / Intel 和 Ubuntu 24.04 amd64 上构建和验证。
 
 ## 技术与构建
 
-- Rust 1.99.1，MSVC 工具链；GPUI Kit 0.9.0，默认 GPUI 后端。
+- Rust 1.99.1，MSVC 工具链；GPUI Kit 0.9.1，默认 GPUI 后端（gpui-pre 0.3.12）。
 - 系统 Git CLI，异步读取；不内置 Git，不引入 libgit2。
 - 日常使用 `cargo build` / `cargo run`，仅在需要发布构建时添加 `--release`。
 - Cargo 使用默认 CPU 并发，没有固定 jobs 限制。
@@ -54,6 +54,10 @@ cargo test --features ui-tests
 cargo clippy --all-targets --features ui-tests -- -D warnings
 cargo build
 ```
+
+2026-11-13：在升级后的锁定依赖上，按 CI 的单线程方式重新运行 `cargo test --locked --features ui-tests -- --test-threads=1`，80 项测试全部通过；另行显式运行历史压力测试通过，覆盖 19,685 和 100,000 条生成提交。100,000 条提交首批约 0.51 秒，全流读取及顺序比较约 2.08 秒。`cargo fmt --all -- --check` 和 `cargo clippy --locked --all-targets --features ui-tests -- -D warnings` 均通过。本轮验证平台为 Windows，使用默认 GPUI 后端。
+
+2026-11-12：升级至 GPUI Kit / Component 0.9.1、gpui-pre 0.3.12、应用图片预览 resvg 0.50.0 和 zip 9.5.1，并更新兼容的间接依赖。组件本地补丁已重新合并并与上游比对。Windows 下 80 项测试通过，1 项手动历史压力测试未运行；格式检查、Clippy 严格检查和默认 Debug 构建通过。已使用 `target/debug/githly.exe` 检查仓库主界面、双栏 Diff 和设置分段控件。GPUI 内部仍按上游依赖使用 resvg 0.45.1 / 0.46.0。
 
 2026-11-06：45 项常规测试通过，另有 1 项显式运行的历史压力测试通过。覆盖真实临时 Git 仓库、分支浏览和安全切换、Stash、暂存 / 工作区、Worktree、统计、刷新和续载合并、图片与 Diff 释放、配置迁移及更新失败路径。格式检查、Clippy 严格检查、Debug 与 Release 构建通过。
 

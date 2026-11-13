@@ -1,8 +1,9 @@
-Source: gpui-component 0.9.0 from the Cargo registry.
+Source: gpui-component 0.9.1 from the Cargo registry.
 License: Apache-2.0; see LICENSE-APACHE. Original sources and locale files retained.
 Selected by the root Cargo.toml [patch.crates-io] entry.
 
 Local changes:
+- Cargo.toml: add bstr for displaying non-UTF-8 Git path bytes.
 - src/diff/parser.rs: display non-UTF-8 bytes in Git-quoted paths as escapes
   so their patches can be viewed. File operations use the application's raw path.
 - src/diff/mod.rs: increase the scaled code font by one logical pixel.

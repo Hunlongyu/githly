@@ -1,5 +1,17 @@
 # 更新日志
 
+## v0.1.12 · 2026-11-13
+
+- 升级 GPUI Kit 至 0.9.1、默认 GPUI 后端至 0.3.12，带入输入、文本渲染、滚动和动效修复；保留双栏 Diff 布局、文本选择和分段控件的本地补丁。
+- SVG 图片预览使用 resvg 0.50.0，更新字体处理和渲染依赖。
+- 升级 ZIP 解压库至 9.5.1，并更新兼容的间接依赖。
+
+**English**
+
+- Updated GPUI Kit to 0.9.1 and the default GPUI backend to 0.3.12, bringing input, text rendering, scrolling and animation fixes while preserving local patches for split diffs, text selection and segmented controls.
+- Updated SVG image previews to resvg 0.50.0 with newer font processing and rendering dependencies.
+- Updated the ZIP extraction library to 9.5.1 and refreshed compatible transitive dependencies.
+
 ## v0.1.11 · 2026-11-10
 
 - 标题栏用浅色块区分项目、工作树和分支。项目名和分支名随窗口宽度展开，超过 32 个字符时显示省略号，悬停可查看全名。
